@@ -6,6 +6,7 @@ from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
+from bot.commands import build_help_text, setup_bot_commands
 from bot.db.database import Database
 from bot.handlers.chats import _admin_panel_text
 from bot.keyboards.admin_kb import admin_main_keyboard
@@ -54,6 +55,32 @@ async def private_messages(message: Message, db: Database) -> None:
         await message.answer(f"{E['ban']} Вы заблокированы на неделю за спам.")
         return
     await message.answer(f"{E['block']} Не лезь, бот не для вас.")
+
+
+@router.message(Command("help"), F.chat.type == ChatType.PRIVATE)
+async def cmd_help(message: Message, db: Database) -> None:
+    if not message.from_user:
+        return
+    uid = message.from_user.id
+    if not await can_access_dm(db, uid):
+        if await db.is_dm_banned(uid):
+            return
+        await db.record_dm_message(uid)
+        await message.answer(f"{E['block']} Не лезь, бот не для вас.")
+        return
+    owner = await is_owner(uid)
+    await message.answer(build_help_text(owner))
+
+
+@router.message(Command("help"), F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
+async def cmd_help_group(message: Message, db: Database) -> None:
+    if not message.from_user:
+        return
+    uid = message.from_user.id
+    if not await can_access_dm(db, uid):
+        return
+    owner = await is_owner(uid)
+    await message.answer(build_help_text(owner))
 
 
 @router.message(Command("admin"), F.chat.type == ChatType.PRIVATE)

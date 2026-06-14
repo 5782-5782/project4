@@ -7,6 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from bot.commands import setup_bot_commands
 from bot.config import get_settings
 from bot.db.database import Database
 from bot.handlers import admin, chat_register, chats, group, moderation
@@ -56,6 +57,7 @@ async def main() -> None:
     dp.include_router(moderation.router)
 
     logger.info("Bot starting... Owner ID: %s", settings.owner_id)
+    await setup_bot_commands(bot)
     try:
         await dp.start_polling(bot)
     finally:
