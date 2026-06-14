@@ -25,6 +25,7 @@ class RPMThrottle(Exception):
 class QueueItem:
     prompt: str
     future: asyncio.Future[str]
+    admin_user_id: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -50,10 +51,11 @@ class GeminiService:
           await self._worker_task
           self._worker_task = None
 
-  async def generate(self, prompt: str, timeout: float = 120.0) -> str:
+  async def generate(self, prompt: str, timeout: float = 120.0, admin_user_id: int | None = None) -> str:
       loop = asyncio.get_running_loop()
       future: asyncio.Future[str] = loop.create_future()
-      await self._queue.put(QueueItem(prompt=prompt, future=future))
+      item = QueueItem(prompt=prompt, future=future, admin_user_id=admin_user_id)
+      await self._queue.put(item)
       return await asyncio.wait_for(future, timeout=timeout)
 
   async def _worker(self) -> None:
@@ -63,7 +65,7 @@ class GeminiService:
               break
           try:
               await self._wait_for_rpm_slot()
-              result = await self._call_with_fallback(item.prompt)
+              result = await self._call_with_fallback(item.prompt, item.admin_user_id)
               if not item.future.done():
                   item.future.set_result(result)
           except Exception as exc:
@@ -84,12 +86,9 @@ class GeminiService:
           self._rpm_timestamps.append(datetime.now(timezone.utc).timestamp())
 
   def _api_keys(self) -> list[str]:
-      keys = [self.settings.gemini_api_key_1]
-      if self.settings.gemini_api_key_2:
-          keys.append(self.settings.gemini_api_key_2)
-      return keys
+      return self.settings.gemini_api_keys
 
-  async def _call_with_fallback(self, prompt: str) -> str:
+  async def _call_with_fallback(self, prompt: str, admin_user_id: int | None = None) -> str:
       keys = self._api_keys()
       usage = await self.db.get_gemini_usage_stats()
       last_error: Exception | None = None
@@ -104,7 +103,7 @@ class GeminiService:
                   continue
               try:
                   text = await self._request(api_key, model, prompt)
-                  await self.db.record_gemini_usage(project_idx, model)
+                  await self.db.record_gemini_usage(project_idx, model, admin_user_id)
                   return text
               except RateLimitExhausted as exc:
                   self._exhausted.add((project_idx, model))

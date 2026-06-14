@@ -86,9 +86,41 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     project_index INTEGER NOT NULL,
                     model TEXT NOT NULL,
+                    admin_user_id INTEGER,
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS registered_chats (
+                    chat_id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT '',
+                    owner_admin_id INTEGER NOT NULL,
+                    registered_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS sub_admins (
+                    user_id INTEGER PRIMARY KEY,
+                    daily_limit INTEGER NOT NULL DEFAULT 500,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS moderation_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER,
+                    action TEXT NOT NULL,
+                    explanation TEXT NOT NULL DEFAULT '',
+                    rule_references TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_registered_chats_owner
+                    ON registered_chats(owner_admin_id);
+                CREATE INDEX IF NOT EXISTS idx_moderation_log_chat
+                    ON moderation_log(chat_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_gemini_usage_admin
+                    ON gemini_usage(admin_user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_punishments_chat_active
                     ON punishments(chat_id, active);
                 CREATE INDEX IF NOT EXISTS idx_punishments_user
@@ -98,6 +130,140 @@ class Database:
                 """
             )
             await db.commit()
+            await self._migrate(db)
+
+    async def _migrate(self, db: aiosqlite.Connection) -> None:
+        try:
+            await db.execute("ALTER TABLE gemini_usage ADD COLUMN admin_user_id INTEGER")
+            await db.commit()
+        except Exception:
+            pass
+
+    async def register_chat(self, chat_id: int, title: str, owner_admin_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO registered_chats (chat_id, title, owner_admin_id, registered_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET title = excluded.title
+                """,
+                (chat_id, title, owner_admin_id, _now_iso()),
+            )
+            await db.commit()
+        await self.get_chat_settings(chat_id)
+
+    async def get_registered_chat(self, chat_id: int) -> dict[str, Any] | None:
+        async with self.connection() as db:
+            row = await (
+                await db.execute("SELECT * FROM registered_chats WHERE chat_id = ?", (chat_id,))
+            ).fetchone()
+            return dict(row) if row else None
+
+    async def list_chats_for_admin(self, admin_id: int, is_owner: bool) -> list[dict[str, Any]]:
+        async with self.connection() as db:
+            if is_owner:
+                rows = await (
+                    await db.execute("SELECT * FROM registered_chats ORDER BY title")
+                ).fetchall()
+            else:
+                rows = await (
+                    await db.execute(
+                        "SELECT * FROM registered_chats WHERE owner_admin_id = ? ORDER BY title",
+                        (admin_id,),
+                    )
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    async def add_sub_admin(self, user_id: int, daily_limit: int, display_name: str = "") -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO sub_admins (user_id, daily_limit, display_name, active, created_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    daily_limit = excluded.daily_limit,
+                    display_name = excluded.display_name,
+                    active = 1
+                """,
+                (user_id, daily_limit, display_name, _now_iso()),
+            )
+            await db.commit()
+
+    async def remove_sub_admin(self, user_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute("UPDATE sub_admins SET active = 0 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def get_sub_admin(self, user_id: int) -> dict[str, Any] | None:
+        async with self.connection() as db:
+            row = await (
+                await db.execute("SELECT * FROM sub_admins WHERE user_id = ?", (user_id,))
+            ).fetchone()
+            return dict(row) if row else None
+
+    async def list_sub_admins(self) -> list[dict[str, Any]]:
+        async with self.connection() as db:
+            rows = await (
+                await db.execute("SELECT * FROM sub_admins WHERE active = 1 ORDER BY created_at")
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    async def update_sub_admin_limit(self, user_id: int, daily_limit: int) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                "UPDATE sub_admins SET daily_limit = ? WHERE user_id = ?", (daily_limit, user_id)
+            )
+            await db.commit()
+
+    async def log_moderation(
+        self,
+        chat_id: int,
+        message_id: int | None,
+        action: str,
+        explanation: str,
+        rule_references: list[str] | None = None,
+    ) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO moderation_log (chat_id, message_id, action, explanation, rule_references, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    message_id,
+                    action,
+                    explanation,
+                    json.dumps(rule_references or [], ensure_ascii=False),
+                    _now_iso(),
+                ),
+            )
+            await db.commit()
+
+    async def get_moderation_stats(self, chat_id: int | None = None, days: int = 1) -> dict[str, int]:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        async with self.connection() as db:
+            if chat_id:
+                rows = await (
+                    await db.execute(
+                        """
+                        SELECT action, COUNT(*) as cnt FROM moderation_log
+                        WHERE chat_id = ? AND created_at >= ? GROUP BY action
+                        """,
+                        (chat_id, since),
+                    )
+                ).fetchall()
+            else:
+                rows = await (
+                    await db.execute(
+                        """
+                        SELECT action, COUNT(*) as cnt FROM moderation_log
+                        WHERE created_at >= ? GROUP BY action
+                        """,
+                        (since,),
+                    )
+                ).fetchall()
+            return {r["action"]: r["cnt"] for r in rows}
 
     async def get_chat_settings(self, chat_id: int) -> dict[str, Any]:
         async with self.connection() as db:
@@ -248,13 +414,24 @@ class Database:
             rows = await (await db.execute(query, (chat_id, *user_ids, since))).fetchall()
             return [_row_to_punishment(r) for r in rows]
 
-    async def record_gemini_usage(self, project_index: int, model: str) -> None:
+    async def record_gemini_usage(self, project_index: int, model: str, admin_user_id: int | None = None) -> None:
         async with self.connection() as db:
             await db.execute(
-                "INSERT INTO gemini_usage (project_index, model, created_at) VALUES (?, ?, ?)",
-                (project_index, model, _now_iso()),
+                "INSERT INTO gemini_usage (project_index, model, admin_user_id, created_at) VALUES (?, ?, ?, ?)",
+                (project_index, model, admin_user_id, _now_iso()),
             )
             await db.commit()
+
+    async def get_admin_daily_usage(self, admin_user_id: int) -> int:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    "SELECT COUNT(*) as cnt FROM gemini_usage WHERE admin_user_id = ? AND created_at >= ?",
+                    (admin_user_id, today_start),
+                )
+            ).fetchone()
+            return row["cnt"] if row else 0
 
     async def get_gemini_usage_stats(self) -> dict[tuple[int, str], int]:
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()

@@ -5,10 +5,11 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import get_settings
 from bot.db.database import Database
-from bot.handlers import admin, group, moderation
+from bot.handlers import admin, chat_register, chats, group, moderation
 from bot.middlewares.services import ServicesMiddleware
 from bot.services.batch import BatchProcessor
 from bot.services.context import ContextBuilder
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     settings = get_settings()
+    if not settings.bot_token or "YOUR_" in settings.bot_token:
+        logger.error("Set bot_token in config/secrets.json")
+        sys.exit(1)
 
     db = Database()
     await db.init()
@@ -39,13 +43,15 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
 
     dp.update.middleware(
         ServicesMiddleware(db, gemini, moderation_svc, batch_processor)
     )
 
     dp.include_router(admin.router)
+    dp.include_router(chat_register.router)
+    dp.include_router(chats.router)
     dp.include_router(group.router)
     dp.include_router(moderation.router)
 

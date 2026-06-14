@@ -1,36 +1,35 @@
 import json
 import logging
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import get_settings
 from bot.db.database import Database
-from bot.keyboards.punishment import admin_main_keyboard, interval_keyboard
+from bot.handlers.chats import _admin_panel_text
+from bot.keyboards.admin_kb import admin_main_keyboard
 from bot.services.gemini import GeminiService
 from bot.ui.emoji import E
+from bot.utils.access import can_access_dm, is_owner
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
-def is_owner(user_id: int) -> bool:
-    return user_id == get_settings().owner_id
-
-
 @router.message(Command("start"), F.chat.type == ChatType.PRIVATE)
-async def cmd_start(message: Message, db: Database) -> None:
+async def cmd_start(message: Message, db: Database, gemini: GeminiService) -> None:
     if not message.from_user:
         return
     uid = message.from_user.id
-    if is_owner(uid):
+    if await can_access_dm(db, uid):
+        owner = await is_owner(uid)
+        role = "владелец" if owner else "суб-админ"
         await message.answer(
-            f"{E['crown']} <b>Добро пожаловать, администратор!</b>\n\n"
-            f"Используйте /admin для панели управления.\n"
-            f"Добавьте бота в группу и назначьте администратором с правом ограничивать участников.",
-            reply_markup=admin_main_keyboard(),
+            f"{E['crown']} <b>Добро пожаловать, {role}!</b>\n\n"
+            f"/admin — панель управления\n"
+            f"Добавьте бота в группу → /linkchat",
+            reply_markup=admin_main_keyboard(owner),
         )
         return
 
@@ -46,7 +45,7 @@ async def private_messages(message: Message, db: Database) -> None:
     if not message.from_user:
         return
     uid = message.from_user.id
-    if is_owner(uid):
+    if await can_access_dm(db, uid):
         return
     if await db.is_dm_banned(uid):
         return
@@ -58,104 +57,83 @@ async def private_messages(message: Message, db: Database) -> None:
 
 
 @router.message(Command("admin"), F.chat.type == ChatType.PRIVATE)
-async def cmd_admin(message: Message, gemini: GeminiService) -> None:
-    if not message.from_user or not is_owner(message.from_user.id):
+async def cmd_admin(message: Message, db: Database, gemini: GeminiService) -> None:
+    if not message.from_user or not await can_access_dm(db, message.from_user.id):
         return
-    text = await gemini.get_limits_dashboard()
-    await message.answer(text, reply_markup=admin_main_keyboard())
+    owner = await is_owner(message.from_user.id)
+    text = await _admin_panel_text(db, gemini, message.from_user.id)
+    await message.answer(text, reply_markup=admin_main_keyboard(owner))
 
 
 @router.callback_query(F.data == "admin:limits")
-async def cb_limits(callback: CallbackQuery, gemini: GeminiService) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
+async def cb_limits(callback: CallbackQuery, gemini: GeminiService, db: Database) -> None:
+    if not callback.from_user or not await can_access_dm(db, callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
+    if not await is_owner(callback.from_user.id):
+        await callback.answer("Только владелец", show_alert=True)
+        return
     text = await gemini.get_limits_dashboard()
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard())
+    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(True))
     await callback.answer()
 
 
 @router.callback_query(F.data == "admin:back")
-async def cb_back(callback: CallbackQuery, gemini: GeminiService) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
+async def cb_back(callback: CallbackQuery, db: Database, gemini: GeminiService) -> None:
+    if not callback.from_user or not await can_access_dm(db, callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
-    text = await gemini.get_limits_dashboard()
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin:interval")
-async def cb_interval_menu(callback: CallbackQuery) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    await callback.message.edit_text(
-        f"{E['clock']} <b>Интервал батчинга</b>\n\n"
-        "Выберите интервал для группы (применяется к чату, из которого вызвано):\n"
-        "<i>0 = каждое сообщение отдельно</i>",
-        reply_markup=interval_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("interval:"))
-async def cb_set_interval(callback: CallbackQuery, db: Database) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    interval = int(callback.data.split(":")[1])
-    # For DM admin, store for a "default" chat or ask - we'll use a sentinel
-    # Owner sets via /setinterval in group; here show confirmation
-    await callback.answer(f"Интервал {interval}с. Используйте /setinterval {interval} в группе.", show_alert=True)
-
-
-@router.callback_query(F.data == "admin:rules")
-async def cb_rules_help(callback: CallbackQuery) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    await callback.message.edit_text(
-        f"{E['rules']} <b>Загрузка правил</b>\n\n"
-        "В группе отправьте команду:\n"
-        "<code>/setrules</code> — затем ответьте на это сообщение текстом правил\n\n"
-        "Или отправьте документ .txt в ответ на <code>/setrules</code>",
-        reply_markup=admin_main_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin:toggle_mod")
-async def cb_toggle_help(callback: CallbackQuery) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    await callback.message.edit_text(
-        f"{E['shield']} <b>Модерация</b>\n\n"
-        "В группе: <code>/mod on</code> или <code>/mod off</code>",
-        reply_markup=admin_main_keyboard(),
-    )
+    owner = await is_owner(callback.from_user.id)
+    text = await _admin_panel_text(db, gemini, callback.from_user.id)
+    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
     await callback.answer()
 
 
 @router.message(Command("allpunishments"), F.chat.type == ChatType.PRIVATE)
 async def cmd_all_punishments(message: Message, db: Database) -> None:
-    if not message.from_user or not is_owner(message.from_user.id):
+    if not message.from_user or not await can_access_dm(db, message.from_user.id):
         return
-    punishments = await db.get_all_punishments(limit=30)
-    text = _format_punishments_list(punishments, title="Все наказания (последние 30)")
-    await message.answer(text, reply_markup=admin_main_keyboard())
+    owner = await is_owner(message.from_user.id)
+    if owner:
+        punishments = await db.get_all_punishments(limit=30)
+    else:
+        chats = await db.list_chats_for_admin(message.from_user.id, False)
+        punishments = []
+        for c in chats:
+            punishments.extend(await db.get_active_punishments(c["chat_id"]))
+    text = _format_punishments_list(punishments, title="Наказания")
+    await message.answer(text, reply_markup=admin_main_keyboard(owner))
 
 
 @router.callback_query(F.data == "admin:all_punishments")
 async def cb_all_punishments(callback: CallbackQuery, db: Database) -> None:
-    if not callback.from_user or not is_owner(callback.from_user.id):
+    if not callback.from_user or not await can_access_dm(db, callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
-    punishments = await db.get_all_punishments(limit=30)
-    text = _format_punishments_list(punishments, title="Все наказания (последние 30)")
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard())
+    owner = await is_owner(callback.from_user.id)
+    if owner:
+        punishments = await db.get_all_punishments(limit=30)
+    else:
+        chats = await db.list_chats_for_admin(callback.from_user.id, False)
+        punishments = []
+        for c in chats:
+            punishments.extend(await db.get_active_punishments(c["chat_id"]))
+    text = _format_punishments_list(punishments, title="Наказания")
+    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
     await callback.answer()
+
+
+@router.message(Command("addadmin"), F.chat.type == ChatType.PRIVATE)
+async def cmd_addadmin(message: Message, db: Database) -> None:
+    if not message.from_user or not await is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer("Использование: /addadmin <user_id> <daily_limit>")
+        return
+    user_id, limit = int(parts[1]), int(parts[2])
+    await db.add_sub_admin(user_id, limit)
+    await message.answer(f"{E['check']} Суб-админ <code>{user_id}</code> — лимит <b>{limit}</b>/день")
 
 
 def _format_punishments_list(punishments, title: str) -> str:

@@ -6,6 +6,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import ChatPermissions
 
+from bot.config import get_settings
 from bot.db.database import Database, Punishment
 from bot.services.context import ContextBuilder, ModerationContext
 from bot.services.gemini import GeminiService, parse_moderation_response
@@ -42,7 +43,7 @@ MODERATION_SYSTEM = """Ты — AI-модератор Telegram-чата. Ана�
 {{
   "action": "none" | "pardon" | "punish",
   "violator_user_id": null или число,
-  "violator_display": "имя/username нарушителя",
+  "violator_display": "имя/username нарушителя или null",
   "rule_references": ["п. 3.2 Запрет оскорблений", "..."],
   "punishment_type": null | "warning" | "mute",
   "duration_minutes": null или число (для mute),
@@ -51,6 +52,11 @@ MODERATION_SYSTEM = """Ты — AI-модератор Telegram-чата. Ана�
   "can_unpunish_user_ids": [список user_id],
   "reply_to_message_id": id сообщения для ответа
 }}
+
+Действия:
+- "none" — нарушений НЕ обнаружено, правила не нарушены. Ничего не предпринимать.
+- "pardon" — формально нарушение есть, но помиловать с устным предупреждением.
+- "punish" — выдать наказание (мут/предупреждение).
 """
 
 
@@ -66,6 +72,7 @@ class ModerationService:
         rules_text: str,
         target_message_id: int,
         context: ModerationContext,
+        admin_user_id: int | None = None,
     ) -> dict[str, Any]:
         past = await self.db.get_punishments_for_users(
             chat_id, list(context.participant_ids), days=30
@@ -76,7 +83,7 @@ class ModerationService:
             past_punishments=past_text,
             context=self.context_builder.format_for_prompt(context),
         )
-        raw = await self.gemini.generate(prompt)
+        raw = await self.gemini.generate(prompt, admin_user_id=admin_user_id)
         result = parse_moderation_response(raw)
         result["reply_to_message_id"] = result.get("reply_to_message_id") or target_message_id
         return result
@@ -86,17 +93,28 @@ class ModerationService:
         bot: Bot,
         chat_id: int,
         decision: dict[str, Any],
-        bot_message_id: int | None = None,
+        message_id: int | None = None,
     ) -> Punishment | None:
         action = decision.get("action", "none")
-        if action == "none":
-            return None
-
-        violator_id = decision.get("violator_user_id")
-        rule_refs = decision.get("rule_references") or []
         explanation = decision.get("explanation", "")
+        rule_refs = decision.get("rule_references") or []
+
+        await self.db.log_moderation(
+            chat_id=chat_id,
+            message_id=message_id or decision.get("reply_to_message_id"),
+            action=action,
+            explanation=explanation,
+            rule_references=rule_refs,
+        )
+
+        if action == "none":
+            settings = get_settings()
+            if settings.log_clean_checks:
+                logger.info("Chat %s: no violation (msg %s) — %s", chat_id, message_id, explanation)
+            return None
         can_unpunish = decision.get("can_unpunish_user_ids") or []
         reply_id = decision.get("reply_to_message_id")
+        violator_id = decision.get("violator_user_id")
 
         if action == "pardon":
             warning = decision.get("warning_text") or "Вы нарушили правила, но вас решили помиловать. Впредь будьте осторожны."

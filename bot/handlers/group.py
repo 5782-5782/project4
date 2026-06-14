@@ -6,17 +6,25 @@ from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwner, Message
 
-from bot.config import get_settings
 from bot.db.database import Database
 from bot.keyboards.punishment import unpunish_keyboard
 from bot.ui.emoji import E
+from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
-def is_owner(user_id: int) -> bool:
-    return user_id == get_settings().owner_id
+async def _can_manage(message: Message, db: Database) -> bool:
+    if not message.from_user:
+        return False
+    uid = message.from_user.id
+    if await is_owner(uid):
+        return True
+    if await can_access_dm(db, uid):
+        return await can_manage_chat(db, uid, message.chat.id)
+    member = await message.bot.get_chat_member(message.chat.id, uid)
+    return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))
 
 
 @router.message(Command("punishments"))
@@ -33,7 +41,7 @@ async def cmd_punishments(message: Message, db: Database) -> None:
 async def cmd_setrules(message: Message, db: Database) -> None:
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
-    if not await _can_manage(message):
+    if not await _can_manage(message, db):
         await message.answer("Только администратор чата или владелец бота.")
         return
     await message.answer(
@@ -47,7 +55,7 @@ async def rules_reply(message: Message, db: Database) -> None:
         return
     if "/setrules" not in message.reply_to_message.text:
         return
-    if not await _can_manage(message):
+    if not await _can_manage(message, db):
         return
 
     rules_text = ""
@@ -72,7 +80,7 @@ async def rules_reply(message: Message, db: Database) -> None:
 async def cmd_setinterval(message: Message, db: Database) -> None:
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
-    if not await _can_manage(message):
+    if not await _can_manage(message, db):
         await message.answer("Только администратор чата или владелец бота.")
         return
     parts = (message.text or "").split()
@@ -96,7 +104,7 @@ async def cmd_setinterval(message: Message, db: Database) -> None:
 async def cmd_mod(message: Message, db: Database) -> None:
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
-    if not await _can_manage(message):
+    if not await _can_manage(message, db):
         await message.answer("Только администратор чата или владелец бота.")
         return
     parts = (message.text or "").split()
@@ -129,7 +137,7 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
     chat_id = callback.message.chat.id
 
     can_unpunish_ids = json.loads(punishment.can_unpunish_ids)
-    allowed = user_id in can_unpunish_ids or is_owner(user_id)
+    allowed = user_id in can_unpunish_ids or await is_owner(user_id)
 
     if not allowed:
         member = await bot.get_chat_member(chat_id, user_id)
@@ -167,17 +175,6 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
         reply_markup=None,
     )
     await callback.answer("Наказание снято!")
-
-
-async def _can_manage(message: Message) -> bool:
-    if not message.from_user:
-        return False
-    if is_owner(message.from_user.id):
-        return True
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return False
-    member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
-    return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))
 
 
 def _format_active(punishments) -> str:
