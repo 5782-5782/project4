@@ -17,10 +17,11 @@ Telegram-бот на **aiogram 3.x** с AI-модерацией через **Gem
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp config/secrets.json.example config/secrets.json
-# Заполните config/secrets.json
+# Вставьте токен от @BotFather в config/secrets.json → bot_token
 python3 -m bot.main
 ```
+
+> `config/secrets.json` в репозитории — держите репозиторий **приватным**.
 
 ## Конфигурация
 
