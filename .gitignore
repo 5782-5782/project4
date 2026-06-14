@@ -1,0 +1,11 @@
+.env
+config/secrets.json
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+data/
+*.db
+.idea/
+.vscode/
