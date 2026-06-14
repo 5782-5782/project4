@@ -28,9 +28,19 @@ python3 -m bot.main
 ```json
 {
   "bot_token": "YOUR_BOT_TOKEN",
-  "gemini_api_keys": ["KEY_PROJECT_1", "KEY_PROJECT_2"]
+  "gemini_api_keys": ["KEY_PROJECT_1", "KEY_PROJECT_2"],
+  "proxy": {
+    "enabled": true,
+    "type": "socks5",
+    "host": "185.13.225.37",
+    "port": 49156,
+    "username": "login",
+    "password": "password"
+  }
 }
 ```
+
+Для HTTP-прокси укажите `"type": "http"` и порт `49155`.
 
 ### config/settings.json
 - `owner_id` — Telegram ID владельца

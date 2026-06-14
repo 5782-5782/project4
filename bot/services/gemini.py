@@ -32,9 +32,11 @@ class QueueItem:
 class GeminiService:
   GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-  def __init__(self, db: Database) -> None:
+  def __init__(self, db: Database, http_session: aiohttp.ClientSession | None = None) -> None:
       self.db = db
       self.settings = get_settings()
+      self._http_session = http_session
+      self._owns_session = http_session is None
       self._queue: asyncio.Queue[QueueItem | None] = asyncio.Queue()
       self._worker_task: asyncio.Task | None = None
       self._rpm_timestamps: list[float] = []
@@ -50,6 +52,8 @@ class GeminiService:
           await self._queue.put(None)
           await self._worker_task
           self._worker_task = None
+      if self._owns_session and self._http_session and not self._http_session.closed:
+          await self._http_session.close()
 
   async def generate(self, prompt: str, timeout: float = 120.0, admin_user_id: int | None = None) -> str:
       loop = asyncio.get_running_loop()
@@ -116,6 +120,11 @@ class GeminiService:
 
       raise RateLimitExhausted("All Gemini models and projects exhausted") from last_error
 
+  def _get_session(self):
+      if self._http_session is not None:
+          return _SessionCtx(self._http_session)
+      return aiohttp.ClientSession()
+
   async def _request(self, api_key: str, model: str, prompt: str) -> str:
       url = self.GEMINI_URL.format(model=model)
       payload = {
@@ -125,7 +134,7 @@ class GeminiService:
               "responseMimeType": "application/json",
           },
       }
-      async with aiohttp.ClientSession() as session:
+      async with self._get_session() as session:
           async with session.post(
               url,
               params={"key": api_key},
@@ -178,6 +187,19 @@ class GeminiService:
           lines.append("")
       lines.append(f"{E['info']} Сброс RPD: полночь PT (08:00 UTC)")
       return "\n".join(lines)
+
+
+class _SessionCtx:
+    """Reuse shared session without closing it."""
+
+    def __init__(self, session: aiohttp.ClientSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> aiohttp.ClientSession:
+        return self._session
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
 
 
 def _is_daily_limit_error(exc: Exception) -> bool:

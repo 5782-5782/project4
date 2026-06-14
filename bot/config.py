@@ -43,6 +43,17 @@ class Settings:
         self.spam_window_seconds: int = int(settings.get("spam_window_seconds", 60))
         self.log_clean_checks: bool = bool(settings.get("log_clean_checks", False))
 
+        self.proxy: dict[str, Any] = secrets.get("proxy", {})
+
+    @property
+    def proxy_url(self) -> str | None:
+        from bot.utils.proxy import build_proxy_url, parse_proxy_config
+
+        cfg = parse_proxy_config(self.proxy)
+        if not cfg:
+            return None
+        return build_proxy_url(cfg)
+
     @property
     def gemini_api_key_1(self) -> str:
         return self.gemini_api_keys[0] if self.gemini_api_keys else ""

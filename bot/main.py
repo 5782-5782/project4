@@ -16,6 +16,7 @@ from bot.services.batch import BatchProcessor
 from bot.services.context import ContextBuilder
 from bot.services.gemini import GeminiService
 from bot.services.moderation import ModerationService
+from bot.utils.proxy import create_aiohttp_session, create_bot_session
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +35,11 @@ async def main() -> None:
     db = Database()
     await db.init()
 
-    gemini = GeminiService(db)
+    proxy_url = settings.proxy_url
+    http_session = create_aiohttp_session(proxy_url)
+    bot_session = create_bot_session(proxy_url)
+
+    gemini = GeminiService(db, http_session=http_session)
     gemini.start()
 
     moderation_svc = ModerationService(db, gemini)
@@ -42,6 +47,7 @@ async def main() -> None:
 
     bot = Bot(
         token=settings.bot_token,
+        session=bot_session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
@@ -62,6 +68,9 @@ async def main() -> None:
         await dp.start_polling(bot)
     finally:
         await gemini.stop()
+        await bot.session.close()
+        if not http_session.closed:
+            await http_session.close()
         logger.info("Bot stopped.")
 
 
