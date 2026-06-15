@@ -14,6 +14,7 @@ from bot.keyboards.admin_kb import admin_main_keyboard
 from bot.keyboards.punishment import punishments_history_keyboard
 from bot.services.gemini import GeminiService
 from bot.ui.emoji import E
+from bot.utils.punishment_time import format_punishment_moment
 from bot.utils.access import can_access_dm, is_owner
 
 logger = logging.getLogger(__name__)
@@ -194,6 +195,7 @@ def _format_punishments_list(punishments, title: str) -> str:
         lines.append(
             f"\n<b>#{p.id}</b> чат <code>{p.chat_id}</code> | user <code>{p.user_id}</code>\n"
             f"Тип: {type_label} | {status}\n"
+            f"🕐 {format_punishment_moment(p.created_at)}\n"
             f"Правила: {', '.join(refs)}\n"
             f"<i>{p.explanation[:100]}</i>"
         )

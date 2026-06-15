@@ -22,6 +22,7 @@ from bot.utils.punishment_message import (
     is_private_punishments_list,
     safe_edit_message,
 )
+from bot.utils.punishment_time import format_punishment_moment
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -320,6 +321,7 @@ def _format_active(punishments) -> str:
         lines.append(
             f"\n<b>#{p.id}</b> — <code>{p.user_id}</code>\n"
             f"Тип: {p.punishment_type}{dur}\n"
+            f"🕐 {format_punishment_moment(p.created_at)}\n"
             f"Правила: {', '.join(refs)}"
         )
     return "\n".join(lines)

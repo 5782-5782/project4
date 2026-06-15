@@ -412,17 +412,25 @@ class Database:
             await db.commit()
             return (cur.rowcount or 0) > 0
 
-    async def get_chat_punishment_history(self, chat_id: int, limit: int = 30) -> list[Punishment]:
+    async def get_chat_punishment_history(
+        self,
+        chat_id: int,
+        limit: int = 30,
+        days: int | None = None,
+    ) -> list[Punishment]:
+        settings = get_settings()
+        retention_days = settings.punishment_history_days if days is None else days
+        since = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         async with self.connection() as db:
             rows = await (
                 await db.execute(
                     """
                     SELECT * FROM punishments
-                    WHERE chat_id = ?
+                    WHERE chat_id = ? AND created_at >= ?
                     ORDER BY created_at DESC
                     LIMIT ?
                     """,
-                    (chat_id, limit),
+                    (chat_id, since, limit),
                 )
             ).fetchall()
             return [_row_to_punishment(r) for r in rows]
@@ -444,28 +452,53 @@ class Database:
             ).fetchall()
             return [_row_to_punishment(r) for r in rows]
 
-    async def get_all_punishments(self, chat_id: int | None = None, limit: int = 50) -> list[Punishment]:
+    async def get_all_punishments(
+        self,
+        chat_id: int | None = None,
+        limit: int = 50,
+        days: int | None = None,
+    ) -> list[Punishment]:
+        settings = get_settings()
+        retention_days = settings.punishment_history_days if days is None else days
+        since = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         async with self.connection() as db:
             if chat_id is not None:
                 rows = await (
                     await db.execute(
-                        "SELECT * FROM punishments WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?",
-                        (chat_id, limit),
+                        """
+                        SELECT * FROM punishments
+                        WHERE chat_id = ? AND created_at >= ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                        """,
+                        (chat_id, since, limit),
                     )
                 ).fetchall()
             else:
                 rows = await (
                     await db.execute(
-                        "SELECT * FROM punishments ORDER BY created_at DESC LIMIT ?",
-                        (limit,),
+                        """
+                        SELECT * FROM punishments
+                        WHERE created_at >= ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                        """,
+                        (since, limit),
                     )
                 ).fetchall()
             return [_row_to_punishment(r) for r in rows]
 
-    async def get_punishments_for_users(self, chat_id: int, user_ids: list[int], days: int = 30) -> list[Punishment]:
+    async def get_punishments_for_users(
+        self,
+        chat_id: int,
+        user_ids: list[int],
+        days: int | None = None,
+    ) -> list[Punishment]:
         if not user_ids:
             return []
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        settings = get_settings()
+        retention_days = settings.punishment_history_days if days is None else days
+        since = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         placeholders = ",".join("?" * len(user_ids))
         query = f"""
             SELECT * FROM punishments

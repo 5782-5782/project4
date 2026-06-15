@@ -4,6 +4,7 @@
   "rpd_per_model": 1000,
   "default_batch_interval": 30,
   "batch_max_messages": 50,
+  "punishment_history_days": 30,
   "database_path": "data/bot.db",
   "spam_ban_days": 7,
   "spam_threshold": 5,
