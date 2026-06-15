@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     settings = get_settings()
-    if not settings.bot_token or "YOUR_" in settings.bot_token:
+    if not settings.bot_token or "YOUR_" in settings.bot_token or "PASTE_" in settings.bot_token:
         logger.error("Set bot_token in config/secrets.json")
         sys.exit(1)
 
