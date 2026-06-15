@@ -368,6 +368,7 @@ class Database:
         message_id: int | None,
         can_unpunish_ids: list[int],
         expires_at: datetime | None,
+        active: bool = True,
     ) -> int:
         async with self.connection() as db:
             cur = await db.execute(
@@ -376,7 +377,7 @@ class Database:
                     chat_id, user_id, username, punishment_type, duration_minutes,
                     rule_references, explanation, message_id, can_unpunish_ids,
                     active, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -388,6 +389,7 @@ class Database:
                     explanation,
                     message_id,
                     json.dumps(can_unpunish_ids),
+                    1 if active else 0,
                     _now_iso(),
                     expires_at.isoformat() if expires_at else None,
                 ),
@@ -403,6 +405,27 @@ class Database:
                 await db.execute("SELECT * FROM punishments WHERE id = ?", (punishment_id,))
             ).fetchone()
             return _row_to_punishment(row) if row else None
+
+    async def delete_punishment(self, punishment_id: int) -> bool:
+        async with self.connection() as db:
+            cur = await db.execute("DELETE FROM punishments WHERE id = ?", (punishment_id,))
+            await db.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def get_chat_punishment_history(self, chat_id: int, limit: int = 30) -> list[Punishment]:
+        async with self.connection() as db:
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT * FROM punishments
+                    WHERE chat_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, limit),
+                )
+            ).fetchall()
+            return [_row_to_punishment(r) for r in rows]
 
     async def get_punishment(self, punishment_id: int) -> Punishment | None:
         async with self.connection() as db:

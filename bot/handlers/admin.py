@@ -11,6 +11,7 @@ from bot.commands import build_help_text, setup_bot_commands
 from bot.db.database import Database
 from bot.handlers.chats import _admin_panel_text, _cancel_rules_input
 from bot.keyboards.admin_kb import admin_main_keyboard
+from bot.keyboards.punishment import punishments_history_keyboard
 from bot.services.gemini import GeminiService
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, is_owner
@@ -136,9 +137,12 @@ async def cmd_all_punishments(message: Message, db: Database) -> None:
         chats = await db.list_chats_for_admin(message.from_user.id, False)
         punishments = []
         for c in chats:
-            punishments.extend(await db.get_active_punishments(c["chat_id"]))
-    text = _format_punishments_list(punishments, title="Наказания")
-    await message.answer(text, reply_markup=admin_main_keyboard(owner))
+            punishments.extend(await db.get_chat_punishment_history(c["chat_id"], limit=15))
+    text = _format_punishments_list(punishments, title="История наказаний")
+    await message.answer(
+        text,
+        reply_markup=punishments_history_keyboard(punishments, "admin:back"),
+    )
 
 
 @router.callback_query(F.data == "admin:all_punishments")
@@ -153,9 +157,12 @@ async def cb_all_punishments(callback: CallbackQuery, db: Database) -> None:
         chats = await db.list_chats_for_admin(callback.from_user.id, False)
         punishments = []
         for c in chats:
-            punishments.extend(await db.get_active_punishments(c["chat_id"]))
-    text = _format_punishments_list(punishments, title="Наказания")
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
+            punishments.extend(await db.get_chat_punishment_history(c["chat_id"], limit=15))
+    text = _format_punishments_list(punishments, title="История наказаний")
+    await callback.message.edit_text(
+        text,
+        reply_markup=punishments_history_keyboard(punishments, "admin:back"),
+    )
     await callback.answer()
 
 
@@ -178,10 +185,15 @@ def _format_punishments_list(punishments, title: str) -> str:
     lines = [f"{E['ban']} <b>{title}</b>\n"]
     for p in punishments:
         refs = json.loads(p.rule_references) if p.rule_references.startswith("[") else [p.rule_references]
-        status = "🟢 активно" if p.active else "⚫ снято"
+        status = "🟢 активно" if p.active else "⚫ в истории"
+        type_label = p.punishment_type
+        if type_label == "warning":
+            type_label = "предупреждение"
+        elif type_label == "admin_warning":
+            type_label = "предупр. админу"
         lines.append(
             f"\n<b>#{p.id}</b> чат <code>{p.chat_id}</code> | user <code>{p.user_id}</code>\n"
-            f"Тип: {p.punishment_type} | {status}\n"
+            f"Тип: {type_label} | {status}\n"
             f"Правила: {', '.join(refs)}\n"
             f"<i>{p.explanation[:100]}</i>"
         )

@@ -270,12 +270,15 @@ async def cb_chat_punishments(callback: CallbackQuery, db: Database) -> None:
     if not await can_manage_chat(db, callback.from_user.id, chat_id):
         await callback.answer("Нет доступа", show_alert=True)
         return
-    punishments = await db.get_active_punishments(chat_id)
+    punishments = await db.get_chat_punishment_history(chat_id)
     from bot.handlers.admin import _format_punishments_list
+    from bot.keyboards.punishment import punishments_history_keyboard
 
-    text = _format_punishments_list(punishments, title=f"Активные наказания чата {chat_id}")
-    owner = await is_owner(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=chat_detail_keyboard(chat_id, True))
+    text = _format_punishments_list(punishments, title=f"История чата {chat_id}")
+    await callback.message.edit_text(
+        text,
+        reply_markup=punishments_history_keyboard(punishments, f"chat:{chat_id}"),
+    )
     await callback.answer()
 
 

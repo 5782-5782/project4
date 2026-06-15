@@ -10,6 +10,7 @@ from bot.config import get_settings
 from bot.db.database import Database, Punishment
 from bot.services.context import ContextBuilder, ModerationContext
 from bot.services.gemini import GeminiService, parse_moderation_response
+from bot.keyboards.punishment import history_only_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,23 @@ class ModerationService:
                 f"📜 <b>Правила:</b> {rules_str}\n"
                 f"💬 {explanation}"
             )
-            await bot.send_message(chat_id, text, reply_to_message_id=reply_id)
+            if violator_id:
+                warning_id = await self._record_warning_entry(
+                    chat_id,
+                    violator_id,
+                    display,
+                    rule_refs,
+                    log_explanation,
+                    reply_id,
+                    can_unpunish,
+                    punishment_type="admin_warning",
+                )
+            await bot.send_message(
+                chat_id,
+                text,
+                reply_to_message_id=reply_id,
+                reply_markup=history_only_keyboard(warning_id) if warning_id else None,
+            )
             return None
 
         if action == "pardon":
@@ -154,7 +171,29 @@ class ModerationService:
                 f"📜 <b>Правила:</b> {rules_str}\n"
                 f"💬 {explanation}"
             )
-            await bot.send_message(chat_id, text, reply_to_message_id=reply_id)
+            record_uid = violator_id
+            record_display = decision.get("violator_display")
+            if not record_uid and target_message and target_message.from_user:
+                record_uid = target_message.from_user.id
+                record_display = record_display or target_message.from_user.full_name
+            warning_id = None
+            if record_uid:
+                warning_id = await self._record_warning_entry(
+                    chat_id,
+                    record_uid,
+                    record_display or str(record_uid),
+                    rule_refs,
+                    explanation,
+                    reply_id,
+                    can_unpunish,
+                    punishment_type="warning",
+                )
+            await bot.send_message(
+                chat_id,
+                text,
+                reply_to_message_id=reply_id,
+                reply_markup=history_only_keyboard(warning_id) if warning_id else None,
+            )
             return None
 
         if action == "punish" and violator_id:
@@ -214,6 +253,31 @@ class ModerationService:
             return await self.db.get_punishment(punishment_id)
 
         return None
+
+    async def _record_warning_entry(
+        self,
+        chat_id: int,
+        user_id: int,
+        display: str | None,
+        rule_refs: list[str],
+        explanation: str,
+        message_id: int | None,
+        can_unpunish: list[int],
+        punishment_type: str = "warning",
+    ) -> int:
+        return await self.db.add_punishment(
+            chat_id=chat_id,
+            user_id=user_id,
+            username=display if display and display.startswith("@") else None,
+            punishment_type=punishment_type,
+            duration_minutes=None,
+            rule_references=rule_refs,
+            explanation=explanation,
+            message_id=message_id,
+            can_unpunish_ids=can_unpunish,
+            expires_at=None,
+            active=False,
+        )
 
 
 def format_decision_preview(decision: dict[str, Any]) -> str:

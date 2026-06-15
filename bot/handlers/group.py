@@ -14,6 +14,7 @@ from bot.services.gemini import GeminiAuthError, RateLimitExhausted
 from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
+from bot.utils.punishment_access import can_manage_punishment
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -211,44 +212,14 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
         await callback.answer("Наказание уже снято", show_alert=True)
         return
 
-    user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
-
-    can_unpunish_ids = json.loads(punishment.can_unpunish_ids)
-    allowed = user_id in can_unpunish_ids or await is_owner(user_id)
-
-    if not allowed:
-        member = await bot.get_chat_member(chat_id, user_id)
-        if isinstance(member, (ChatMemberOwner, ChatMemberAdministrator)):
-            allowed = True
-
-    if not allowed:
+    if not await can_manage_punishment(db, bot, punishment, callback.from_user.id):
         await callback.answer(
             "Снять наказание может только пострадавший или администратор чата",
             show_alert=True,
         )
         return
 
-    if punishment.punishment_type == "mute":
-        from aiogram.types import ChatPermissions
-
-        await bot.restrict_chat_member(
-            chat_id,
-            punishment.user_id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_audios=True,
-                can_send_documents=True,
-                can_send_photos=True,
-                can_send_videos=True,
-                can_send_video_notes=True,
-                can_send_voice_messages=True,
-                can_send_polls=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True,
-            ),
-        )
-
+    await _lift_mute(bot, punishment.chat_id, punishment.user_id, punishment.punishment_type)
     await db.deactivate_punishment(punishment_id)
     original = callback.message.text or callback.message.caption or ""
     await callback.message.edit_text(
@@ -256,6 +227,63 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
         reply_markup=None,
     )
     await callback.answer("Наказание снято!")
+
+
+@router.callback_query(F.data.startswith("punish_del:"))
+async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None:
+    if not callback.from_user or not callback.message:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    punishment_id = int(callback.data.split(":")[1])
+    punishment = await db.get_punishment(punishment_id)
+    if not punishment:
+        await callback.answer("Запись не найдена", show_alert=True)
+        return
+
+    if not await can_manage_punishment(db, bot, punishment, callback.from_user.id):
+        await callback.answer(
+            "Удалить из истории может пострадавший или администратор чата",
+            show_alert=True,
+        )
+        return
+
+    if punishment.active:
+        await _lift_mute(bot, punishment.chat_id, punishment.user_id, punishment.punishment_type)
+
+    await db.delete_punishment(punishment_id)
+    original = callback.message.text or callback.message.caption or ""
+    try:
+        await callback.message.edit_text(
+            f"{original}\n\n🗑 <b>Удалено из истории</b> ({callback.from_user.full_name})",
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+    await callback.answer("Удалено из истории")
+
+
+async def _lift_mute(bot: Bot, chat_id: int, user_id: int, punishment_type: str) -> None:
+    if punishment_type != "mute":
+        return
+    from aiogram.types import ChatPermissions
+
+    await bot.restrict_chat_member(
+        chat_id,
+        user_id,
+        permissions=ChatPermissions(
+            can_send_messages=True,
+            can_send_audios=True,
+            can_send_documents=True,
+            can_send_photos=True,
+            can_send_videos=True,
+            can_send_video_notes=True,
+            can_send_voice_messages=True,
+            can_send_polls=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True,
+        ),
+    )
 
 
 def _format_active(punishments) -> str:

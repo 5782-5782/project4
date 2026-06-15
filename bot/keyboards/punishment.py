@@ -1,6 +1,19 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
+def history_only_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Убрать из истории",
+                    callback_data=f"punish_del:{punishment_id}",
+                )
+            ]
+        ]
+    )
+
+
 def unpunish_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -8,10 +21,26 @@ def unpunish_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🕊 Снять наказание",
                     callback_data=f"unpunish:{punishment_id}",
-                )
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Из истории",
+                    callback_data=f"punish_del:{punishment_id}",
+                ),
             ]
         ]
     )
+
+
+def punishments_history_keyboard(punishments: list, back_data: str = "admin:back") -> InlineKeyboardMarkup:
+    rows = []
+    for p in punishments[:12]:
+        status = "🟢" if p.active else "⚫"
+        label = f"{status} #{p.id} {p.punishment_type}"
+        rows.append([
+            InlineKeyboardButton(text=f"🗑 {label}", callback_data=f"punish_del:{p.id}"),
+        ])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back_data)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_main_keyboard() -> InlineKeyboardMarkup:
