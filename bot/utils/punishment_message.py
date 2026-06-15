@@ -1,7 +1,16 @@
+import asyncio
+import logging
+
+from aiogram import Bot
 from aiogram.enums import ChatType
 from aiogram.types import InlineKeyboardMarkup, Message
 
 from bot.db.database import Database
+
+logger = logging.getLogger(__name__)
+
+# Telegram Bot API: answerCallbackQuery text max length when show_alert=True
+CALLBACK_ALERT_TEXT_LIMIT = 200
 from bot.keyboards.punishment import punishments_history_keyboard
 from bot.utils.access import is_owner
 
@@ -50,6 +59,30 @@ async def build_punishments_list_view(
     text = _format_punishments_list(punishments, title=title)
     markup = punishments_history_keyboard(punishments, back_data)
     return text, markup
+
+
+async def deliver_punishment_reason(
+    bot: Bot,
+    chat_id: int,
+    explanation: str,
+    callback_answer,
+) -> None:
+    reason = (explanation or "").strip() or "Причина не указана."
+    if len(reason) <= CALLBACK_ALERT_TEXT_LIMIT:
+        await callback_answer(reason, show_alert=True)
+        return
+
+    await callback_answer()
+    sent = await bot.send_message(chat_id, f"💬 {reason}")
+    asyncio.create_task(_delete_message_later(sent, delay_seconds=10))
+
+
+async def _delete_message_later(message: Message, delay_seconds: int) -> None:
+    await asyncio.sleep(delay_seconds)
+    try:
+        await message.delete()
+    except Exception as exc:
+        logger.debug("Could not delete temporary reason message: %s", exc)
 
 
 def is_private_punishments_list(message: Message) -> bool:
