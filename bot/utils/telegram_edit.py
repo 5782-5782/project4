@@ -52,6 +52,7 @@ async def safe_edit_message(
         await edit_message_text_safe(message, text)
         if reply_markup is not None:
             await edit_message_markup_safe(message, reply_markup)
+            await edit_message_markup_safe(message, reply_markup)
 
 
 async def edit_message_status_and_keyboard(
@@ -59,7 +60,11 @@ async def edit_message_status_and_keyboard(
     text: str,
     reply_markup: InlineKeyboardMarkup | None,
 ) -> None:
-    """Edit text and inline keyboard in separate API calls."""
+    """Edit text and inline keyboard in separate API calls.
+
+    Telegram may drop inline keyboard on edit_text even without reply_markup,
+    so we always re-apply markup after updating text.
+    """
     await edit_message_text_safe(message, text)
     if reply_markup is not None:
         await edit_message_markup_safe(message, reply_markup)
