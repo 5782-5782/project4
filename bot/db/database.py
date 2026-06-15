@@ -138,6 +138,16 @@ class Database:
             await db.commit()
         except Exception:
             pass
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_rules_input (
+                user_id INTEGER PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.commit()
 
     async def register_chat(self, chat_id: int, title: str, owner_admin_id: int) -> None:
         async with self.connection() as db:
@@ -297,6 +307,35 @@ class Database:
                 "UPDATE chat_settings SET rules_text = ?, updated_at = ? WHERE chat_id = ?",
                 (rules_text, _now_iso(), chat_id),
             )
+            await db.commit()
+
+    async def set_pending_rules_input(self, user_id: int, chat_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO pending_rules_input (user_id, chat_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    chat_id = excluded.chat_id,
+                    created_at = excluded.created_at
+                """,
+                (user_id, chat_id, _now_iso()),
+            )
+            await db.commit()
+
+    async def get_pending_rules_input(self, user_id: int) -> int | None:
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    "SELECT chat_id FROM pending_rules_input WHERE user_id = ?",
+                    (user_id,),
+                )
+            ).fetchone()
+            return int(row["chat_id"]) if row else None
+
+    async def clear_pending_rules_input(self, user_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute("DELETE FROM pending_rules_input WHERE user_id = ?", (user_id,))
             await db.commit()
 
     async def update_batch_interval(self, chat_id: int, interval: int) -> None:

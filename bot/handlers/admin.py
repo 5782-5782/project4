@@ -4,11 +4,12 @@ import logging
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import BaseFilter, Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.commands import build_help_text, setup_bot_commands
 from bot.db.database import Database
-from bot.handlers.chats import _admin_panel_text
+from bot.handlers.chats import _admin_panel_text, _cancel_rules_input
 from bot.keyboards.admin_kb import admin_main_keyboard
 from bot.services.gemini import GeminiService
 from bot.ui.emoji import E
@@ -113,10 +114,11 @@ async def cb_limits(callback: CallbackQuery, gemini: GeminiService, db: Database
 
 
 @router.callback_query(F.data == "admin:back")
-async def cb_back(callback: CallbackQuery, db: Database, gemini: GeminiService) -> None:
+async def cb_back(callback: CallbackQuery, db: Database, gemini: GeminiService, state: FSMContext) -> None:
     if not callback.from_user or not await can_access_dm(db, callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
+    await _cancel_rules_input(state, db, callback.from_user.id)
     owner = await is_owner(callback.from_user.id)
     text = await _admin_panel_text(db, gemini, callback.from_user.id)
     await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))

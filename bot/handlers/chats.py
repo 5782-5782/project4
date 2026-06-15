@@ -1,9 +1,10 @@
+import html
 import json
 import logging
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import BaseFilter, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -19,10 +20,40 @@ from bot.keyboards.admin_kb import (
 from bot.services.gemini import GeminiService
 from bot.states.admin import AdminStates
 from bot.ui.emoji import E
-from bot.utils.access import can_manage_chat, is_owner
+from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+class PendingRulesFilter(BaseFilter):
+    """Private message from admin who is editing chat rules."""
+
+    async def __call__(self, message: Message, db: Database) -> bool:
+        if not message.from_user or message.chat.type != ChatType.PRIVATE:
+            return False
+        if not await can_access_dm(db, message.from_user.id):
+            return False
+        return await db.get_pending_rules_input(message.from_user.id) is not None
+
+
+async def _cancel_rules_input(state: FSMContext, db: Database, user_id: int) -> None:
+    await db.clear_pending_rules_input(user_id)
+    current = await state.get_state()
+    if current == AdminStates.waiting_rules.state:
+        await state.clear()
+
+
+async def _extract_rules_text(message: Message) -> str | None:
+    if message.document:
+        if not message.document.file_name or not message.document.file_name.endswith(".txt"):
+            return None
+        file = await message.bot.get_file(message.document.file_id)
+        data = await message.bot.download_file(file.file_path)
+        return data.read().decode("utf-8", errors="replace")
+    if message.text:
+        return message.text
+    return None
 
 
 async def _admin_panel_text(db: Database, gemini: GeminiService, user_id: int) -> str:
@@ -50,10 +81,11 @@ async def _admin_panel_text(db: Database, gemini: GeminiService, user_id: int) -
 
 
 @router.callback_query(F.data == "admin:chats")
-async def cb_chats(callback: CallbackQuery, db: Database) -> None:
+async def cb_chats(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
     if not callback.from_user:
         return
     uid = callback.from_user.id
+    await _cancel_rules_input(state, db, uid)
     owner = await is_owner(uid)
     chats = await db.list_chats_for_admin(uid, owner)
     if not chats:
@@ -87,9 +119,10 @@ async def cb_chats_page(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data.regexp(r"^chat:-?\d+$"))
-async def cb_chat_detail(callback: CallbackQuery, db: Database) -> None:
+async def cb_chat_detail(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
     if not callback.from_user:
         return
+    await _cancel_rules_input(state, db, callback.from_user.id)
     chat_id = int(callback.data.split(":")[1])
     uid = callback.from_user.id
     if not await can_manage_chat(db, uid, chat_id):
@@ -167,48 +200,62 @@ async def cb_chat_rules(callback: CallbackQuery, state: FSMContext, db: Database
     if not callback.from_user:
         return
     chat_id = int(callback.data.split(":")[1])
-    if not await can_manage_chat(db, callback.from_user.id, chat_id):
+    uid = callback.from_user.id
+    if not await can_manage_chat(db, uid, chat_id):
         await callback.answer("Нет доступа", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_rules)
     await state.update_data(chat_id=chat_id)
+    await db.set_pending_rules_input(uid, chat_id)
     settings = await db.get_chat_settings(chat_id)
-    preview = (settings.get("rules_text") or "")[:500]
+    preview = html.escape((settings.get("rules_text") or "")[:500])
     await callback.message.edit_text(
         f"{E['rules']} <b>Правила чата</b>\n\n"
-        f"Отправьте новый текст правил следующим сообщением или .txt файлом.\n\n"
+        f"Отправьте новый текст правил следующим сообщением или .txt файлом.\n"
+        f"Отмена: /cancel\n\n"
         f"<b>Текущие:</b>\n<pre>{preview or '(пусто)'}</pre>",
     )
     await callback.answer()
 
 
-@router.message(StateFilter(AdminStates.waiting_rules), F.chat.type == ChatType.PRIVATE)
+@router.message(
+    PendingRulesFilter(),
+    F.chat.type == ChatType.PRIVATE,
+    ~(F.text.startswith("/") & ~F.text.startswith("/cancel")),
+)
 async def receive_rules(message: Message, state: FSMContext, db: Database) -> None:
     if not message.from_user:
         return
 
-    rules_text = ""
-    if message.document:
-        if not message.document.file_name or not message.document.file_name.endswith(".txt"):
-            await message.answer("Нужен файл .txt с правилами.")
-            return
-        file = await message.bot.get_file(message.document.file_id)
-        data = await message.bot.download_file(file.file_path)
-        rules_text = data.read().decode("utf-8", errors="replace")
-    elif message.text:
-        rules_text = message.text
-    else:
-        await message.answer("Отправьте текст правил или .txt файл.")
+    if message.text and message.text.strip().lower() == "/cancel":
+        await _cancel_rules_input(state, db, message.from_user.id)
+        owner = await is_owner(message.from_user.id)
+        await message.answer("Редактирование правил отменено.", reply_markup=admin_main_keyboard(owner))
         return
 
-    data = await state.get_data()
-    chat_id = data.get("chat_id")
-    if not chat_id or not await can_manage_chat(db, message.from_user.id, chat_id):
-        await state.clear()
+    rules_text = await _extract_rules_text(message)
+    if rules_text is None:
+        if message.document:
+            await message.answer("Нужен файл .txt с правилами.")
+        else:
+            await message.answer("Отправьте текст правил или .txt файл. Отмена: /cancel")
         return
+
+    chat_id = await db.get_pending_rules_input(message.from_user.id)
+    if not chat_id or not await can_manage_chat(db, message.from_user.id, chat_id):
+        await _cancel_rules_input(state, db, message.from_user.id)
+        await message.answer("Не удалось определить чат. Откройте чат снова и нажмите «Правила».")
+        return
+
     await db.update_chat_rules(chat_id, rules_text)
-    await state.clear()
+    await _cancel_rules_input(state, db, message.from_user.id)
     owner = await is_owner(message.from_user.id)
+    logger.info(
+        "Rules updated for chat %s by user %s (%s chars)",
+        chat_id,
+        message.from_user.id,
+        len(rules_text),
+    )
     await message.answer(
         f"{E['check']} Правила обновлены ({len(rules_text)} символов)",
         reply_markup=admin_main_keyboard(owner),
