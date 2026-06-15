@@ -15,6 +15,13 @@ from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 from bot.utils.punishment_access import can_manage_punishment
+from bot.utils.punishment_message import (
+    append_status_line,
+    build_punishments_list_view,
+    get_punishments_list_back,
+    is_private_punishments_list,
+    safe_edit_message,
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -229,9 +236,11 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
     await _lift_mute(bot, punishment.chat_id, punishment.user_id, punishment.punishment_type)
     await db.deactivate_punishment(punishment_id)
     original = callback.message.text or callback.message.caption or ""
-    await callback.message.edit_text(
-        f"{original}\n\n{E['pardon']} <b>Наказание снято</b> пользователем {callback.from_user.full_name}",
-        reply_markup=None,
+    status = f"{E['pardon']} <b>Наказание снято</b> пользователем {callback.from_user.full_name}"
+    await safe_edit_message(
+        callback.message,
+        append_status_line(original, status),
+        unpunish_keyboard(punishment_id),
     )
     await callback.answer("Наказание снято!")
 
@@ -259,14 +268,22 @@ async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None
         await _lift_mute(bot, punishment.chat_id, punishment.user_id, punishment.punishment_type)
 
     await db.delete_punishment(punishment_id)
+
+    if is_private_punishments_list(callback.message):
+        back_data = get_punishments_list_back(callback.message.reply_markup)
+        assert back_data is not None
+        text, markup = await build_punishments_list_view(db, callback.from_user.id, back_data)
+        await safe_edit_message(callback.message, text, markup)
+        await callback.answer("Удалено из истории")
+        return
+
     original = callback.message.text or callback.message.caption or ""
-    try:
-        await callback.message.edit_text(
-            f"{original}\n\n🗑 <b>Удалено из истории</b> ({callback.from_user.full_name})",
-            reply_markup=None,
-        )
-    except Exception:
-        pass
+    status = f"🗑 <b>Удалено из истории</b> ({callback.from_user.full_name})"
+    await safe_edit_message(
+        callback.message,
+        append_status_line(original, status),
+        unpunish_keyboard(punishment_id),
+    )
     await callback.answer("Удалено из истории")
 
 
