@@ -19,6 +19,7 @@ from bot.utils.punishment_access import can_manage_punishment
 from bot.utils.punishment_message import (
     append_status_line,
     build_punishments_list_view,
+    deliver_punishment_reason,
     get_punishments_list_back,
     is_private_punishments_list,
 )
@@ -257,6 +258,26 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
         history_only_keyboard(punishment_id),
     )
     await callback.answer("Наказание снято!")
+
+
+@router.callback_query(F.data.startswith("punish_reason:"))
+async def cb_punish_reason(callback: CallbackQuery, db: Database, bot: Bot) -> None:
+    if not callback.from_user or not callback.message:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    punishment_id = int(callback.data.split(":")[1])
+    punishment = await db.get_punishment(punishment_id)
+    if not punishment:
+        await callback.answer("Запись не найдена", show_alert=True)
+        return
+
+    await deliver_punishment_reason(
+        bot,
+        callback.message.chat.id,
+        punishment.explanation,
+        callback.answer,
+    )
 
 
 @router.callback_query(F.data.startswith("punish_del:"))

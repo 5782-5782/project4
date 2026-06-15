@@ -420,10 +420,7 @@ class ModerationService:
             )
             if affected_line:
                 text += f"{affected_line}\n"
-            text += (
-                f"📜 <b>Правила:</b>\n{rules_str}\n\n"
-                f"💬 {explanation}"
-            )
+            text += f"📜 <b>Правила:</b>\n{rules_str}"
             if unpunish_line:
                 text += f"\n\n{unpunish_line}"
             sent = await bot.send_message(
