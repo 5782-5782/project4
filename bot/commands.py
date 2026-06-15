@@ -20,6 +20,7 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="setrules", description="Загрузить правила"),
             BotCommand(command="setinterval", description="Интервал батчинга"),
             BotCommand(command="mod", description="Вкл/выкл модерацию"),
+            BotCommand(command="modtest", description="Тест ИИ (ответом на сообщение)"),
         ],
         scope=BotCommandScopeAllGroupChats(),
     )
@@ -43,6 +44,10 @@ def build_help_text(is_owner: bool) -> str:
         "/setrules — загрузить правила (ответом на сообщение бота)",
         "/setinterval &lt;сек&gt; — интервал батчинга (0 = сразу)",
         "/mod on|off — включить/выключить модерацию",
+        "/modtest — тест ИИ (ответом на сообщение)",
+        "",
+        f"<i>Чтобы бот видел все сообщения: @BotFather → /setprivacy → Disable</i>",
+        "/modtest — тест ИИ (ответом на сообщение, без наказания)",
         "/punishments — активные наказания чата",
         "",
         f"<i>Управление чатами также доступно через /admin → Мои чаты</i>",

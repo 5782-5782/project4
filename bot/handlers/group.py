@@ -8,6 +8,9 @@ from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwne
 
 from bot.db.database import Database
 from bot.keyboards.punishment import unpunish_keyboard
+from bot.services.batch import BatchProcessor
+from bot.services.context import ContextBuilder
+from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 
@@ -25,6 +28,61 @@ async def _can_manage(message: Message, db: Database) -> bool:
         return await can_manage_chat(db, uid, message.chat.id)
     member = await message.bot.get_chat_member(message.chat.id, uid)
     return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))
+
+
+@router.message(Command("modtest"))
+async def cmd_modtest(
+    message: Message,
+    db: Database,
+    moderation: ModerationService,
+    batch_processor: BatchProcessor,
+) -> None:
+    """Force AI check on a replied message and show the result (owner/admins only)."""
+    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+    if not message.from_user or not await _can_manage(message, db):
+        await message.answer("Только администратор чата или владелец бота.")
+        return
+    if not message.reply_to_message:
+        await message.answer(
+            f"{E['info']} Ответьте <b>/modtest</b> на сообщение, которое нужно проверить ИИ."
+        )
+        return
+    target = message.reply_to_message
+    if not target.from_user or target.from_user.is_bot:
+        await message.answer("Нужно ответить на сообщение пользователя.")
+        return
+    if not target.text and not target.caption:
+        await message.answer("У сообщения должен быть текст.")
+        return
+
+    settings = await db.get_chat_settings(message.chat.id)
+    if not settings.get("moderation_enabled", 1):
+        await message.answer("Модерация выключена. Включите: /mod on")
+        return
+
+    status = await message.answer(f"{E['robot']} Проверяю сообщение через ИИ…")
+    try:
+        batch_processor.store_history(message.chat.id, target)
+        history = batch_processor.get_history(message.chat.id)
+        ctx = ContextBuilder().build(target, history)
+        decision = await moderation.analyze(
+            message.chat.id,
+            settings.get("rules_text", ""),
+            target.message_id,
+            ctx,
+            admin_user_id=message.from_user.id,
+        )
+        preview = format_decision_preview(decision)
+        await status.edit_text(
+            f"{E['robot']} <b>Тест ИИ-модерации</b> (наказание не применяется)\n\n{preview}"
+        )
+    except Exception as exc:
+        logger.exception("modtest failed chat=%s", message.chat.id)
+        await status.edit_text(
+            f"{E['ban']} Ошибка ИИ: <code>{type(exc).__name__}</code>\n\n"
+            f"<i>Проверьте /admin → Лимиты API и ключи Gemini.</i>"
+        )
 
 
 @router.message(Command("punishments"))

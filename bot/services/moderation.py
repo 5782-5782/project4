@@ -178,6 +178,39 @@ class ModerationService:
         return None
 
 
+def format_decision_preview(decision: dict[str, Any]) -> str:
+    action = decision.get("action", "none")
+    explanation = decision.get("explanation", "")
+    rule_refs = decision.get("rule_references") or []
+    rules_str = "; ".join(rule_refs) if rule_refs else "—"
+
+    if action == "none":
+        return (
+            f"✅ <b>Нарушений нет</b>\n\n"
+            f"💬 {explanation or 'Сообщение соответствует правилам.'}"
+        )
+    if action == "pardon":
+        warning = decision.get("warning_text") or "Устное предупреждение"
+        return (
+            f"🕊 <b>Помилование</b>\n\n"
+            f"📜 Правила: {rules_str}\n"
+            f"⚠️ {warning}\n\n"
+            f"💬 {explanation}"
+        )
+    if action == "punish":
+        ptype = decision.get("punishment_type", "mute")
+        duration = decision.get("duration_minutes")
+        violator = decision.get("violator_display") or decision.get("violator_user_id")
+        duration_str = f" на {duration} мин" if duration else ""
+        return (
+            f"🚫 <b>Наказание: {ptype}{duration_str}</b>\n\n"
+            f"👤 Нарушитель: <b>{violator}</b>\n"
+            f"📜 Правила: {rules_str}\n\n"
+            f"💬 {explanation}"
+        )
+    return f"❓ Неизвестное действие: <code>{action}</code>\n\n💬 {explanation}"
+
+
 def _format_past_punishments(punishments: list[Punishment]) -> str:
     if not punishments:
         return "(нет наказаний за последний месяц)"

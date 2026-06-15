@@ -44,6 +44,9 @@ class BatchProcessor:
         if len(history) > 200:
             self._history[chat_id] = history[-200:]
 
+    def get_history(self, chat_id: int) -> list[Message]:
+        return list(self._history.get(chat_id, []))
+
     async def enqueue(self, bot: Bot, message: Message) -> None:
         chat_id = message.chat.id
         settings = await self.db.get_chat_settings(chat_id)
@@ -57,6 +60,13 @@ class BatchProcessor:
         if not allowed:
             logger.warning("Skipping moderation chat=%s: %s", chat_id, reason)
             return
+
+        logger.info(
+            "Queued moderation chat=%s msg=%s interval=%ss",
+            chat_id,
+            message.message_id,
+            settings.get("batch_interval", 30),
+        )
 
         interval = settings.get("batch_interval", 30)
 
@@ -99,6 +109,13 @@ class BatchProcessor:
     ) -> None:
         settings = await self.db.get_chat_settings(chat_id)
         rules = settings.get("rules_text", "")
+
+        logger.info(
+            "Processing moderation batch chat=%s messages=%s rules_len=%s",
+            chat_id,
+            len(messages),
+            len(rules or ""),
+        )
 
         for msg in messages:
             try:
