@@ -14,6 +14,19 @@ def history_only_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def punishment_done_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалено из истории",
+                    callback_data="punish_done:deleted",
+                )
+            ]
+        ]
+    )
+
+
 def unpunish_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

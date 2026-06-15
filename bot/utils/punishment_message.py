@@ -1,3 +1,5 @@
+import logging
+
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup, Message
@@ -5,6 +7,8 @@ from aiogram.types import InlineKeyboardMarkup, Message
 from bot.db.database import Database
 from bot.keyboards.punishment import punishments_history_keyboard
 from bot.utils.access import is_owner
+
+logger = logging.getLogger(__name__)
 
 
 def get_punishments_list_back(markup: InlineKeyboardMarkup | None) -> str | None:
@@ -24,29 +28,54 @@ def append_status_line(text: str, status: str) -> str:
     return f"{text}\n\n{status}"
 
 
+async def edit_message_text_safe(message: Message, text: str) -> bool:
+    try:
+        await message.edit_text(text)
+        return True
+    except TelegramBadRequest as exc:
+        err = str(exc).lower()
+        if "message is not modified" in err:
+            return False
+        if message.caption is not None:
+            try:
+                await message.edit_caption(caption=text)
+                return True
+            except TelegramBadRequest as cap_exc:
+                if "message is not modified" in str(cap_exc).lower():
+                    return False
+        logger.warning("Failed to edit message text chat=%s: %s", message.chat.id, exc)
+        return False
+
+
+async def edit_message_markup_safe(message: Message, reply_markup: InlineKeyboardMarkup | None) -> bool:
+    try:
+        await message.edit_reply_markup(reply_markup=reply_markup)
+        return True
+    except TelegramBadRequest as exc:
+        err = str(exc).lower()
+        if "message is not modified" in err:
+            return True
+        logger.warning("Failed to edit message markup chat=%s: %s", message.chat.id, exc)
+        return False
+
+
+async def edit_message_status_and_keyboard(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> None:
+    """Edit text and inline keyboard in separate API calls (Telegram is flaky when combined)."""
+    await edit_message_text_safe(message, text)
+    if reply_markup is not None:
+        await edit_message_markup_safe(message, reply_markup)
+
+
 async def safe_edit_message(
     message: Message,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    try:
-        await message.edit_text(text, reply_markup=reply_markup)
-    except TelegramBadRequest as exc:
-        err = str(exc).lower()
-        if "message is not modified" in err:
-            if reply_markup is not None:
-                try:
-                    await message.edit_reply_markup(reply_markup=reply_markup)
-                except TelegramBadRequest:
-                    pass
-            return
-        if reply_markup is not None:
-            try:
-                await message.edit_reply_markup(reply_markup=reply_markup)
-                return
-            except TelegramBadRequest:
-                pass
-        raise exc
+    await edit_message_status_and_keyboard(message, text, reply_markup)
 
 
 async def build_punishments_list_view(

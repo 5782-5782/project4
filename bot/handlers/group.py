@@ -7,7 +7,7 @@ from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwner, Message
 
 from bot.db.database import Database
-from bot.keyboards.punishment import unpunish_keyboard
+from bot.keyboards.punishment import history_only_keyboard, punishment_done_keyboard
 from bot.services.batch import BatchProcessor
 from bot.services.context import ContextBuilder
 from bot.services.gemini import GeminiAuthError, RateLimitExhausted
@@ -18,6 +18,8 @@ from bot.utils.punishment_access import can_manage_punishment
 from bot.utils.punishment_message import (
     append_status_line,
     build_punishments_list_view,
+    edit_message_markup_safe,
+    edit_message_status_and_keyboard,
     get_punishments_list_back,
     is_private_punishments_list,
     safe_edit_message,
@@ -224,6 +226,7 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
         await callback.answer("Наказание не найдено", show_alert=True)
         return
     if not punishment.active:
+        await edit_message_markup_safe(callback.message, history_only_keyboard(punishment_id))
         await callback.answer("Наказание уже снято", show_alert=True)
         return
 
@@ -238,10 +241,10 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
     await db.deactivate_punishment(punishment_id)
     original = callback.message.text or callback.message.caption or ""
     status = f"{E['pardon']} <b>Наказание снято</b> пользователем {callback.from_user.full_name}"
-    await safe_edit_message(
+    await edit_message_status_and_keyboard(
         callback.message,
         append_status_line(original, status),
-        unpunish_keyboard(punishment_id),
+        history_only_keyboard(punishment_id),
     )
     await callback.answer("Наказание снято!")
 
@@ -280,12 +283,17 @@ async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None
 
     original = callback.message.text or callback.message.caption or ""
     status = f"🗑 <b>Удалено из истории</b> ({callback.from_user.full_name})"
-    await safe_edit_message(
+    await edit_message_status_and_keyboard(
         callback.message,
         append_status_line(original, status),
-        unpunish_keyboard(punishment_id),
+        punishment_done_keyboard(),
     )
     await callback.answer("Удалено из истории")
+
+
+@router.callback_query(F.data.startswith("punish_done:"))
+async def cb_punish_done(callback: CallbackQuery) -> None:
+    await callback.answer("Запись уже обработана")
 
 
 async def _lift_mute(bot: Bot, chat_id: int, user_id: int, punishment_type: str) -> None:
