@@ -28,7 +28,7 @@ def current_slot_start(ts: float, interval: int) -> int:
 @dataclass
 class ChatBatchState:
     messages: list[Message] = field(default_factory=list)
-    last_slot_start: int = 0
+    open_slot: int | None = None
     owner_id: int | None = None
 
 
@@ -111,10 +111,12 @@ class BatchProcessor:
         slot = current_slot_start(now, interval)
         async with self._lock:
             state = self._states[chat_id]
+            if not state.messages:
+                state.open_slot = slot
             state.messages.append(message)
             state.owner_id = owner_id
-            if state.last_slot_start == 0:
-                state.last_slot_start = slot
+
+        await self._maybe_flush_chat(chat_id, now)
 
     async def _slot_scheduler(self) -> None:
         while True:
@@ -139,18 +141,22 @@ class BatchProcessor:
         slot = current_slot_start(now, interval)
         async with self._lock:
             state = self._states.get(chat_id)
-            if not state:
+            if not state or not state.messages or state.open_slot is None:
                 return
-            if slot <= state.last_slot_start:
-                return
-            if not state.messages:
-                state.last_slot_start = slot
+            if slot == state.open_slot:
                 return
             msgs = state.messages[:]
             hist = list(self._history.get(chat_id, []))
             owner_id = state.owner_id
             state.messages.clear()
-            state.last_slot_start = slot
+            state.open_slot = None
+
+        logger.info(
+            "Flushing moderation slot chat=%s slot=%s messages=%s",
+            chat_id,
+            slot,
+            len(msgs),
+        )
 
         if owner_id is None:
             owner_id = await get_chat_owner_for_processing(self.db, chat_id)
@@ -195,25 +201,56 @@ class BatchProcessor:
                 logger.warning("Quota exhausted for chat=%s: %s", chat_id, reason)
                 break
             try:
+                if len(chunk) == 1:
+                    msg = chunk[0]
+                    ctx = self.context_builder.build(msg, history)
+                    decision = await self.moderation.analyze(
+                        chat_id,
+                        rules,
+                        msg.message_id,
+                        ctx,
+                        admin_user_id=owner_id,
+                    )
+                    await self.moderation.apply_decision(
+                        bot, chat_id, decision, msg.message_id, target_message=msg
+                    )
+                    continue
+
                 ctx = self.context_builder.build_batch(chunk, history)
+                target_ids = [m.message_id for m in chunk]
                 decisions = await self.moderation.analyze_batch(
                     chat_id,
                     rules,
-                    [m.message_id for m in chunk],
+                    target_ids,
                     ctx,
                     admin_user_id=owner_id,
                 )
                 msg_by_id = {m.message_id: m for m in chunk}
+                mapped = self.moderation.map_batch_decisions(decisions, chunk)
                 for msg_id in sorted(msg_by_id):
-                    decision = decisions.get(msg_id)
+                    msg = msg_by_id[msg_id]
+                    decision = mapped.get(msg_id)
                     if not decision:
-                        continue
+                        logger.warning(
+                            "Batch missing decision chat=%s msg=%s, fallback to single analyze",
+                            chat_id,
+                            msg_id,
+                        )
+                        ctx_single = self.context_builder.build(msg, history)
+                        decision = await self.moderation.analyze(
+                            chat_id,
+                            rules,
+                            msg_id,
+                            ctx_single,
+                            admin_user_id=owner_id,
+                        )
+                    decision = self.moderation.enrich_decision(decision, msg)
                     await self.moderation.apply_decision(
                         bot,
                         chat_id,
                         decision,
                         msg_id,
-                        target_message=msg_by_id[msg_id],
+                        target_message=msg,
                     )
             except Exception:
                 logger.exception(

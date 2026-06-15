@@ -116,6 +116,7 @@ BATCH_MODERATION_SYSTEM = """Ты — AI-модератор Telegram-чата. �
 - "punish" — выдать наказание (мут/предупреждение).
 
 В массиве decisions должен быть ровно один объект на каждое сообщение из батча.
+Для каждого решения поле message_id ОБЯЗАТЕЛЬНО должно совпадать с id из раздела «СООБЩЕНИЯ ДЛЯ АНАЛИЗА».
 """
 
 
@@ -166,20 +167,69 @@ class ModerationService:
         )
         raw = await self.gemini.generate(prompt, admin_user_id=admin_user_id)
         decisions = parse_batch_moderation_response(raw)
+        return self._index_batch_decisions(decisions, target_message_ids)
+
+    def map_batch_decisions(
+        self,
+        by_id: dict[int, dict[str, Any]],
+        messages: list[Message],
+    ) -> dict[int, dict[str, Any]]:
+        ordered = sorted(messages, key=lambda m: m.message_id)
+        mapped: dict[int, dict[str, Any]] = {}
+        used: set[int] = set()
+
+        for msg in ordered:
+            decision = by_id.get(msg.message_id)
+            if decision:
+                mapped[msg.message_id] = decision
+                used.add(msg.message_id)
+
+        leftovers = [d for mid, d in sorted(by_id.items()) if mid not in used]
+        for msg, decision in zip(
+            [m for m in ordered if m.message_id not in mapped],
+            leftovers,
+        ):
+            decision = dict(decision)
+            decision["message_id"] = msg.message_id
+            decision["reply_to_message_id"] = decision.get("reply_to_message_id") or msg.message_id
+            mapped[msg.message_id] = decision
+
+        return mapped
+
+    def enrich_decision(self, decision: dict[str, Any], message: Message) -> dict[str, Any]:
+        result = dict(decision)
+        msg_id = message.message_id
+        result["message_id"] = msg_id
+        result["reply_to_message_id"] = result.get("reply_to_message_id") or msg_id
+        if message.from_user and not result.get("violator_user_id"):
+            if result.get("action") in ("punish", "pardon"):
+                result["violator_user_id"] = message.from_user.id
+                if not result.get("violator_display"):
+                    result["violator_display"] = (
+                        f"@{message.from_user.username}"
+                        if message.from_user.username
+                        else message.from_user.full_name
+                    )
+        return result
+
+    def _index_batch_decisions(
+        self,
+        decisions: list[dict[str, Any]],
+        target_message_ids: list[int],
+    ) -> dict[int, dict[str, Any]]:
         by_id: dict[int, dict[str, Any]] = {}
         for decision in decisions:
-            msg_id = decision.get("message_id")
+            msg_id = _extract_decision_message_id(decision)
             if msg_id is None:
                 continue
-            msg_id = int(msg_id)
             decision["reply_to_message_id"] = decision.get("reply_to_message_id") or msg_id
             by_id[msg_id] = decision
         for msg_id in target_message_ids:
             if msg_id not in by_id:
                 logger.warning(
-                    "Batch moderation missing decision for chat=%s message_id=%s",
-                    chat_id,
+                    "Batch moderation missing decision for message_id=%s (have=%s)",
                     msg_id,
+                    sorted(by_id.keys()),
                 )
         return by_id
 
@@ -454,10 +504,23 @@ def parse_batch_moderation_response(raw: str) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
-        decisions = data.get("decisions")
-        if isinstance(decisions, list):
-            return [item for item in decisions if isinstance(item, dict)]
+        for key in ("decisions", "results", "messages"):
+            items = data.get(key)
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
     raise ValueError("Batch response is not a JSON object with decisions array")
+
+
+def _extract_decision_message_id(decision: dict[str, Any]) -> int | None:
+    for key in ("message_id", "reply_to_message_id", "target_message_id"):
+        raw = decision.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 async def _is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
