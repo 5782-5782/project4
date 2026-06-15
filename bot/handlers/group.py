@@ -21,6 +21,8 @@ from bot.utils.punishment_message import (
     append_status_line,
     build_punishments_list_view,
     deliver_punishment_reason,
+    extract_reason_from_message,
+    format_reason_status_line,
     get_punishments_list_back,
     is_private_punishments_list,
 )
@@ -311,6 +313,7 @@ async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None
     if punishment.active:
         await _lift_mute(bot, punishment.chat_id, punishment.user_id, punishment.punishment_type)
 
+    explanation = punishment.explanation
     await db.delete_punishment(punishment_id)
 
     if is_private_punishments_list(callback.message):
@@ -322,13 +325,37 @@ async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None
         return
 
     original = callback.message.text or callback.message.caption or ""
-    status = f"🗑 <b>Удалено из истории</b> ({callback.from_user.full_name})"
+    status = format_reason_status_line(explanation)
     await edit_message_status_and_keyboard(
         callback.message,
         append_status_line(original, status),
         punishment_done_keyboard(),
     )
     await callback.answer("Удалено из истории")
+
+
+@router.callback_query(F.data == "punish_done:reason")
+async def cb_punish_done_reason(callback: CallbackQuery, bot: Bot, db: Database) -> None:
+    if not callback.from_user or not callback.message:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    if not await guard_punishment_button(callback, db):
+        return
+
+    text = callback.message.text or callback.message.caption or ""
+    explanation = extract_reason_from_message(text)
+    if not explanation:
+        await callback.answer("Причина не найдена", show_alert=True)
+        return
+
+    await deliver_punishment_reason(
+        bot,
+        callback.message.chat.id,
+        explanation,
+        callback.answer,
+        source_message=callback.message,
+        clicked_by=format_callback_user(callback.from_user),
+    )
 
 
 @router.callback_query(F.data.startswith("punish_done:"))

@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 
 from aiogram import Bot
@@ -31,6 +32,21 @@ def append_status_line(text: str, status: str) -> str:
     if status in text:
         return text
     return f"{text}\n\n{status}"
+
+
+def format_reason_status_line(explanation: str) -> str:
+    reason = (explanation or "").strip() or "Причина не указана."
+    return f"💬 {html.escape(reason)}"
+
+
+def extract_reason_from_message(text: str) -> str | None:
+    marker = "\n\n💬 "
+    idx = text.rfind(marker)
+    if idx != -1:
+        return html.unescape(text[idx + len(marker) :].strip())
+    if text.startswith("💬 "):
+        return html.unescape(text[2:].strip())
+    return None
 
 
 async def build_punishments_list_view(

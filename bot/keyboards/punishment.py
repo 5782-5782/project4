@@ -27,8 +27,8 @@ def punishment_done_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🗑 Удалено из истории",
-                    callback_data="punish_done:deleted",
+                    text="💬 Причина",
+                    callback_data="punish_done:reason",
                 )
             ]
         ]
