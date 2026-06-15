@@ -165,7 +165,11 @@ async def cmd_setinterval(message: Message, db: Database) -> None:
     parts = (message.text or "").split()
     if len(parts) < 2:
         settings = await db.get_chat_settings(message.chat.id)
-        await message.answer(f"Текущий интервал: <b>{settings['batch_interval']}</b> сек.\nИспользование: /setinterval 30")
+        await message.answer(
+            f"Текущий интервал: <b>{settings['batch_interval']}</b> сек.\n"
+            f"Слоты по UTC: :00, :30 (при 30с) — пачка сообщений → 1 запрос Gemini.\n"
+            f"Использование: /setinterval 30"
+        )
         return
     try:
         interval = int(parts[1])
@@ -175,7 +179,10 @@ async def cmd_setinterval(message: Message, db: Database) -> None:
         await message.answer("Укажите число секунд (0 или больше).")
         return
     await db.update_batch_interval(message.chat.id, interval)
-    desc = "каждое сообщение отдельно" if interval == 0 else f"каждые {interval} сек"
+    if interval == 0:
+        desc = "каждое сообщение отдельно (1 запрос)"
+    else:
+        desc = f"слоты каждые {interval} сек (пачка → 1 запрос Gemini)"
     await message.answer(f"{E['check']} Интервал батчинга: <b>{desc}</b>")
 
 

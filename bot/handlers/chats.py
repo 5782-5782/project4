@@ -157,7 +157,9 @@ async def cb_chat_interval_menu(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     await callback.message.edit_text(
-        f"{E['clock']} <b>Интервал батчинга</b>\n\n0 = каждое сообщение отдельно",
+        f"{E['clock']} <b>Интервал батчинга</b>\n\n"
+        f"0 = каждое сообщение отдельно\n"
+        f"15/30/60 = слоты по UTC, до 50 сообщений за 1 запрос Gemini",
         reply_markup=chat_interval_keyboard(chat_id),
     )
     await callback.answer()

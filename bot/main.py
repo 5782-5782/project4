@@ -50,6 +50,8 @@ async def main() -> None:
         session=bot_session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    batch_processor.start(bot)
+
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.update.middleware(
@@ -67,6 +69,7 @@ async def main() -> None:
     try:
         await dp.start_polling(bot)
     finally:
+        await batch_processor.stop()
         await gemini.stop()
         await bot.session.close()
         if not http_session.closed:

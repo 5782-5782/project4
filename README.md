@@ -47,7 +47,8 @@ python3 -m bot.main
 - `owner_id` — Telegram ID владельца
 - `rpm_limit` — запросов в минуту (15)
 - `rpd_per_model` — лимит на модель/день (1000)
-- `default_batch_interval` — батчинг (30 сек)
+- `default_batch_interval` — интервал слотов батчинга (30 сек → :00 и :30 UTC)
+- `batch_max_messages` — макс. сообщений в одном запросе Gemini (50)
 - `log_clean_checks` — логировать «не нарушил» в консоль
 
 ## Команды

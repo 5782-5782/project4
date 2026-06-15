@@ -8,7 +8,7 @@ from aiogram.types import ChatMemberAdministrator, ChatMemberOwner, ChatPermissi
 
 from bot.config import get_settings
 from bot.db.database import Database, Punishment
-from bot.services.context import ContextBuilder, ModerationContext
+from bot.services.context import ContextBuilder, ModerationContext, BatchModerationContext
 from bot.services.gemini import GeminiService, parse_moderation_response
 from bot.keyboards.punishment import history_only_keyboard
 
@@ -62,6 +62,62 @@ MODERATION_SYSTEM = """Ты — AI-модератор Telegram-чата. Ана�
 - "punish" — выдать наказание (мут/предупреждение).
 """
 
+BATCH_MODERATION_SYSTEM = """Ты — AI-модератор Telegram-чата. Анализируй сообщения строго по правилам чата и этическим нормам.
+
+ЭТИЧЕСКИЕ НОРМЫ (приоритет при помиловании):
+- Не наказывай за явные шутки между друзьями без злого умысла
+- Учитывай контекст и тон беседы
+- Различай конструктивную критику и оскорбления
+- При сомнении — устное предупреждение вместо жёсткого наказания
+- Учитывай повторные нарушения: при рецидиве ужесточай наказание
+
+ПРАВИЛА ЧАТА:
+{rules}
+
+ПРОШЛЫЕ НАКАЗАНИЯ УЧАСТНИКОВ (за последний месяц):
+{past_punishments}
+
+КОНТЕКСТ ПЕРЕПИСКИ:
+{context}
+
+ЗАДАЧА:
+Проанализируй КАЖДОЕ сообщение из раздела «СООБЩЕНИЯ ДЛЯ АНАЛИЗА (батч)» отдельно.
+Для каждого message_id определи:
+1. Нарушены ли правила чата?
+2. Кто нарушитель (user_id)?
+3. Если правила требуют наказания, но этика позволяет простить — выдай помилование с устным предупреждением
+4. При наказании укажи конкретные пункты/названия правил
+5. Укажи user_id тех, кто может снять наказание (пострадавшие, адресаты оскорблений)
+6. Укажи affected_users — кому адресовано нарушение (оскорбление, угроза, хамство в ответ и т.д.)
+
+Ответь ТОЛЬКО валидным JSON:
+{{
+  "decisions": [
+    {{
+      "message_id": число,
+      "action": "none" | "pardon" | "punish",
+      "violator_user_id": null или число,
+      "violator_display": "имя/username нарушителя или null",
+      "affected_users": [{{"user_id": число, "display": "имя или @username"}}],
+      "rule_references": ["п. 3.2 Запрет оскорблений", "..."],
+      "punishment_type": null | "warning" | "mute",
+      "duration_minutes": null или число (для mute),
+      "warning_text": "текст устного предупреждения при помиловании",
+      "explanation": "краткое объяснение решения",
+      "can_unpunish_user_ids": [список user_id — обязательно включи пострадавших из affected_users],
+      "reply_to_message_id": id сообщения для ответа
+    }}
+  ]
+}}
+
+Действия:
+- "none" — нарушений НЕ обнаружено, правила не нарушены. Ничего не предпринимать.
+- "pardon" — формально нарушение есть, но помиловать с устным предупреждением.
+- "punish" — выдать наказание (мут/предупреждение).
+
+В массиве decisions должен быть ровно один объект на каждое сообщение из батча.
+"""
+
 
 class ModerationService:
     def __init__(self, db: Database, gemini: GeminiService) -> None:
@@ -90,6 +146,42 @@ class ModerationService:
         result = parse_moderation_response(raw)
         result["reply_to_message_id"] = result.get("reply_to_message_id") or target_message_id
         return result
+
+    async def analyze_batch(
+        self,
+        chat_id: int,
+        rules_text: str,
+        target_message_ids: list[int],
+        context: BatchModerationContext,
+        admin_user_id: int | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        past = await self.db.get_punishments_for_users(
+            chat_id, list(context.participant_ids), days=30
+        )
+        past_text = _format_past_punishments(past)
+        prompt = BATCH_MODERATION_SYSTEM.format(
+            rules=rules_text or "(правила не заданы — используй этические нормы)",
+            past_punishments=past_text,
+            context=self.context_builder.format_batch_for_prompt(context),
+        )
+        raw = await self.gemini.generate(prompt, admin_user_id=admin_user_id)
+        decisions = parse_batch_moderation_response(raw)
+        by_id: dict[int, dict[str, Any]] = {}
+        for decision in decisions:
+            msg_id = decision.get("message_id")
+            if msg_id is None:
+                continue
+            msg_id = int(msg_id)
+            decision["reply_to_message_id"] = decision.get("reply_to_message_id") or msg_id
+            by_id[msg_id] = decision
+        for msg_id in target_message_ids:
+            if msg_id not in by_id:
+                logger.warning(
+                    "Batch moderation missing decision for chat=%s message_id=%s",
+                    chat_id,
+                    msg_id,
+                )
+        return by_id
 
     async def apply_decision(
         self,
@@ -352,6 +444,20 @@ def _format_past_punishments(punishments: list[Punishment]) -> str:
             f"правила: {refs_str}, статус: {active}, дата: {p.created_at[:10]}"
         )
     return "\n".join(lines)
+
+
+def parse_batch_moderation_response(raw: str) -> list[dict[str, Any]]:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    data = json.loads(text)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        decisions = data.get("decisions")
+        if isinstance(decisions, list):
+            return [item for item in decisions if isinstance(item, dict)]
+    raise ValueError("Batch response is not a JSON object with decisions array")
 
 
 async def _is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
