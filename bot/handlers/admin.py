@@ -16,6 +16,7 @@ from bot.services.gemini import GeminiService
 from bot.ui.emoji import E
 from bot.utils.punishment_time import format_punishment_moment
 from bot.utils.access import can_access_dm, is_owner
+from bot.utils.telegram_edit import safe_edit_message
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -111,7 +112,7 @@ async def cb_limits(callback: CallbackQuery, gemini: GeminiService, db: Database
         await callback.answer("Только владелец", show_alert=True)
         return
     text = await gemini.get_limits_dashboard()
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(True))
+    await safe_edit_message(callback.message, text, admin_main_keyboard(True))
     await callback.answer()
 
 
@@ -123,7 +124,7 @@ async def cb_back(callback: CallbackQuery, db: Database, gemini: GeminiService, 
     await _cancel_rules_input(state, db, callback.from_user.id)
     owner = await is_owner(callback.from_user.id)
     text = await _admin_panel_text(db, gemini, callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
+    await safe_edit_message(callback.message, text, admin_main_keyboard(owner))
     await callback.answer()
 
 
@@ -160,9 +161,10 @@ async def cb_all_punishments(callback: CallbackQuery, db: Database) -> None:
         for c in chats:
             punishments.extend(await db.get_chat_punishment_history(c["chat_id"], limit=15))
     text = _format_punishments_list(punishments, title="История наказаний")
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         text,
-        reply_markup=punishments_history_keyboard(punishments, "admin:back"),
+        punishments_history_keyboard(punishments, "admin:back"),
     )
     await callback.answer()
 

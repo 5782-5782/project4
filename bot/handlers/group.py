@@ -18,10 +18,12 @@ from bot.utils.punishment_access import can_manage_punishment
 from bot.utils.punishment_message import (
     append_status_line,
     build_punishments_list_view,
-    edit_message_markup_safe,
-    edit_message_status_and_keyboard,
     get_punishments_list_back,
     is_private_punishments_list,
+)
+from bot.utils.telegram_edit import (
+    edit_message_markup_safe,
+    edit_message_status_and_keyboard,
     safe_edit_message,
 )
 from bot.utils.punishment_time import format_punishment_moment

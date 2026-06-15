@@ -21,6 +21,7 @@ from bot.services.gemini import GeminiService
 from bot.states.admin import AdminStates
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
+from bot.utils.telegram_edit import safe_edit_message
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -89,16 +90,18 @@ async def cb_chats(callback: CallbackQuery, db: Database, state: FSMContext) -> 
     owner = await is_owner(uid)
     chats = await db.list_chats_for_admin(uid, owner)
     if not chats:
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             f"{E['info']} <b>Нет привязанных чатов</b>\n\n"
             "Добавьте бота в группу и отправьте /linkchat",
-            reply_markup=admin_main_keyboard(owner),
+            admin_main_keyboard(owner),
         )
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"{E['shield']} <b>Ваши чаты</b> ({len(chats)})",
-        reply_markup=chats_list_keyboard(chats),
+        chats_list_keyboard(chats),
     )
     await callback.answer()
 
@@ -111,9 +114,10 @@ async def cb_chats_page(callback: CallbackQuery, db: Database) -> None:
     uid = callback.from_user.id
     owner = await is_owner(uid)
     chats = await db.list_chats_for_admin(uid, owner)
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"{E['shield']} <b>Ваши чаты</b> ({len(chats)})",
-        reply_markup=chats_list_keyboard(chats, page=page),
+        chats_list_keyboard(chats, page=page),
     )
     await callback.answer()
 
@@ -156,11 +160,12 @@ async def cb_chat_interval_menu(callback: CallbackQuery, db: Database) -> None:
     if not await can_manage_chat(db, callback.from_user.id, chat_id):
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"{E['clock']} <b>Интервал батчинга</b>\n\n"
         f"0 = каждое сообщение отдельно\n"
         f"15/30/60 = слоты по UTC, до 50 сообщений за 1 запрос Gemini",
-        reply_markup=chat_interval_keyboard(chat_id),
+        chat_interval_keyboard(chat_id),
     )
     await callback.answer()
 
@@ -194,7 +199,7 @@ async def _show_chat_detail(message, db: Database, user_id: int, chat_id: int) -
         f"📜 Правила: <b>{rules_len}</b> символов\n\n"
         f"📈 Сегодня: 🕊{stats.get('pardon', 0)} | 🚫{stats.get('punish', 0)}"
     )
-    await message.edit_text(text, reply_markup=chat_detail_keyboard(chat_id, mod_on))
+    await safe_edit_message(callback.message, text, chat_detail_keyboard(chat_id, mod_on))
 
 
 @router.callback_query(F.data.startswith("chat_rules:"))
@@ -211,7 +216,8 @@ async def cb_chat_rules(callback: CallbackQuery, state: FSMContext, db: Database
     await db.set_pending_rules_input(uid, chat_id)
     settings = await db.get_chat_settings(chat_id)
     preview = html.escape((settings.get("rules_text") or "")[:500])
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"{E['rules']} <b>Правила чата</b>\n\n"
         f"Отправьте новый текст правил следующим сообщением или .txt файлом.\n"
         f"Отмена: /cancel\n\n"
@@ -277,9 +283,10 @@ async def cb_chat_punishments(callback: CallbackQuery, db: Database) -> None:
     from bot.keyboards.punishment import punishments_history_keyboard
 
     text = _format_punishments_list(punishments, title=f"История чата {chat_id}")
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         text,
-        reply_markup=punishments_history_keyboard(punishments, f"chat:{chat_id}"),
+        punishments_history_keyboard(punishments, f"chat:{chat_id}"),
     )
     await callback.answer()
 
@@ -295,7 +302,7 @@ async def cb_stats(callback: CallbackQuery, db: Database) -> None:
         f"🕊 Помилован: <b>{stats.get('pardon', 0)}</b>\n"
         f"🚫 Наказан: <b>{stats.get('punish', 0)}</b>"
     )
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
+    await safe_edit_message(callback.message, text, admin_main_keyboard(owner))
     await callback.answer()
 
 
@@ -307,9 +314,10 @@ async def cb_subadmins(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("Только владелец", show_alert=True)
         return
     admins = await db.list_sub_admins()
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"{E['crown']} <b>Суб-админы</b>\n\nУправляют только своими чатами.",
-        reply_markup=subadmins_keyboard(admins),
+        subadmins_keyboard(admins),
     )
     await callback.answer()
 
@@ -320,8 +328,9 @@ async def cb_subadmin_add(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Только владелец", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_subadmin_id)
-    await callback.message.edit_text(
-        "👤 Отправьте Telegram ID нового суб-админа:\n\n<i>Узнать ID: @userinfobot</i>"
+    await safe_edit_message(
+        callback.message,
+        "👤 Отправьте Telegram ID нового суб-админа:\n\n<i>Узнать ID: @userinfobot</i>",
     )
     await callback.answer()
 
@@ -370,7 +379,7 @@ async def cb_subadmin_detail(callback: CallbackQuery, db: Database) -> None:
         f"Лимит: <b>{used}</b>/{admin['daily_limit']} сегодня\n"
         f"Чатов: <b>{len(chats)}</b>"
     )
-    await callback.message.edit_text(text, reply_markup=subadmin_detail_keyboard(user_id))
+    await safe_edit_message(callback.message, text, subadmin_detail_keyboard(user_id))
     await callback.answer()
 
 
@@ -393,7 +402,7 @@ async def cb_subadmin_limit(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = int(callback.data.split(":")[1])
     await state.set_state(AdminStates.editing_subadmin_limit)
     await state.update_data(edit_admin_id=user_id)
-    await callback.message.edit_text(f"📊 Новый дневной лимит для <code>{user_id}</code>:")
+    await safe_edit_message(callback.message, f"📊 Новый дневной лимит для <code>{user_id}</code>:")
     await callback.answer()
 
 
