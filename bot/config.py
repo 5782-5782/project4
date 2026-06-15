@@ -44,6 +44,15 @@ class Settings:
         self.spam_ban_days: int = int(settings.get("spam_ban_days", 7))
         self.spam_threshold: int = int(settings.get("spam_threshold", 5))
         self.spam_window_seconds: int = int(settings.get("spam_window_seconds", 60))
+        self.punishment_button_spam_threshold: int = int(
+            settings.get("punishment_button_spam_threshold", 5)
+        )
+        self.punishment_button_spam_window_seconds: int = int(
+            settings.get("punishment_button_spam_window_seconds", 60)
+        )
+        self.punishment_button_spam_ban_minutes: int = int(
+            settings.get("punishment_button_spam_ban_minutes", 10)
+        )
         self.log_clean_checks: bool = bool(settings.get("log_clean_checks", False))
         self.limits_refresh_minutes: int = int(settings.get("limits_refresh_minutes", 30))
 

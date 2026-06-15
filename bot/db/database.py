@@ -83,6 +83,24 @@ class Database:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS punishment_button_spam_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS punishment_button_spam_bans (
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    banned_until TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, chat_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_punishment_button_spam_events_user_chat
+                    ON punishment_button_spam_events(user_id, chat_id, created_at);
+
                 CREATE TABLE IF NOT EXISTS gemini_usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     project_index INTEGER NOT NULL,
@@ -609,6 +627,72 @@ class Database:
                 return True
         return False
 
+    async def get_punishment_button_ban_remaining(
+        self, user_id: int, chat_id: int
+    ) -> int | None:
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    """
+                    SELECT banned_until FROM punishment_button_spam_bans
+                    WHERE user_id = ? AND chat_id = ?
+                    """,
+                    (user_id, chat_id),
+                )
+            ).fetchone()
+            if not row:
+                return None
+            banned_until = datetime.fromisoformat(row["banned_until"])
+            now = datetime.now(timezone.utc)
+            if banned_until > now:
+                return int((banned_until - now).total_seconds())
+            await db.execute(
+                "DELETE FROM punishment_button_spam_bans WHERE user_id = ? AND chat_id = ?",
+                (user_id, chat_id),
+            )
+            await db.commit()
+            return None
+
+    async def record_punishment_button_click(self, user_id: int, chat_id: int) -> bool:
+        settings = get_settings()
+        now = datetime.now(timezone.utc)
+        window_start = (
+            now - timedelta(seconds=settings.punishment_button_spam_window_seconds)
+        ).isoformat()
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO punishment_button_spam_events (user_id, chat_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, chat_id, now.isoformat()),
+            )
+            row = await (
+                await db.execute(
+                    """
+                    SELECT COUNT(*) as cnt FROM punishment_button_spam_events
+                    WHERE user_id = ? AND chat_id = ? AND created_at >= ?
+                    """,
+                    (user_id, chat_id, window_start),
+                )
+            ).fetchone()
+            await db.commit()
+            if row and row["cnt"] >= settings.punishment_button_spam_threshold:
+                banned_until = now + timedelta(minutes=settings.punishment_button_spam_ban_minutes)
+                await db.execute(
+                    """
+                    INSERT INTO punishment_button_spam_bans (user_id, chat_id, banned_until, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                        banned_until = excluded.banned_until,
+                        created_at = excluded.created_at
+                    """,
+                    (user_id, chat_id, banned_until.isoformat(), now.isoformat()),
+                )
+                await db.commit()
+                return True
+        return False
+
     async def save_chat_message(self, msg: StoredChatMessage) -> None:
         settings = get_settings()
         keep = settings.chat_history_limit
@@ -721,6 +805,8 @@ class Database:
             "chat_messages",
             "dm_spam_events",
             "dm_spam_bans",
+            "punishment_button_spam_events",
+            "punishment_button_spam_bans",
             "pending_rules_input",
         ]
         if not keep_chats:

@@ -10,6 +10,9 @@
   "spam_ban_days": 7,
   "spam_threshold": 5,
   "spam_window_seconds": 60,
+  "punishment_button_spam_threshold": 5,
+  "punishment_button_spam_window_seconds": 60,
+  "punishment_button_spam_ban_minutes": 10,
   "gemini_models": [
     "gemini-2.5-pro",
     "gemini-2.5-flash",

@@ -16,6 +16,7 @@ from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 from bot.utils.punishment_access import can_manage_punishment
+from bot.utils.punishment_button_spam import format_callback_user, guard_punishment_button
 from bot.utils.punishment_message import (
     append_status_line,
     build_punishments_list_view,
@@ -230,6 +231,8 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
     if not callback.from_user or not callback.message:
         await callback.answer("Ошибка", show_alert=True)
         return
+    if not await guard_punishment_button(callback, db):
+        return
 
     punishment_id = int(callback.data.split(":")[1])
     punishment = await db.get_punishment(punishment_id)
@@ -265,6 +268,8 @@ async def cb_punish_reason(callback: CallbackQuery, db: Database, bot: Bot) -> N
     if not callback.from_user or not callback.message:
         await callback.answer("Ошибка", show_alert=True)
         return
+    if not await guard_punishment_button(callback, db):
+        return
 
     punishment_id = int(callback.data.split(":")[1])
     punishment = await db.get_punishment(punishment_id)
@@ -277,6 +282,8 @@ async def cb_punish_reason(callback: CallbackQuery, db: Database, bot: Bot) -> N
         callback.message.chat.id,
         punishment.explanation,
         callback.answer,
+        source_message=callback.message,
+        clicked_by=format_callback_user(callback.from_user),
     )
 
 
@@ -284,6 +291,8 @@ async def cb_punish_reason(callback: CallbackQuery, db: Database, bot: Bot) -> N
 async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None:
     if not callback.from_user or not callback.message:
         await callback.answer("Ошибка", show_alert=True)
+        return
+    if not await guard_punishment_button(callback, db):
         return
 
     punishment_id = int(callback.data.split(":")[1])
