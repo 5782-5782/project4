@@ -127,6 +127,8 @@ class BatchProcessor:
                 decision = await self.moderation.analyze(
                     chat_id, rules, msg.message_id, ctx, admin_user_id=owner_id
                 )
-                await self.moderation.apply_decision(bot, chat_id, decision, msg.message_id)
+                await self.moderation.apply_decision(
+                    bot, chat_id, decision, msg.message_id, target_message=msg
+                )
             except Exception:
                 logger.exception("Moderation failed for chat=%s msg=%s", chat_id, msg.message_id)

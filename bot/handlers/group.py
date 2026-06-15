@@ -223,7 +223,10 @@ async def cb_unpunish(callback: CallbackQuery, db: Database, bot: Bot) -> None:
             allowed = True
 
     if not allowed:
-        await callback.answer("У вас нет права снять это наказание", show_alert=True)
+        await callback.answer(
+            "Снять наказание может только пострадавший или администратор чата",
+            show_alert=True,
+        )
         return
 
     if punishment.punishment_type == "mute":

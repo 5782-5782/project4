@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aiogram import Bot
-from aiogram.types import ChatMemberAdministrator, ChatMemberOwner, ChatPermissions
+from aiogram.types import ChatMemberAdministrator, ChatMemberOwner, ChatPermissions, Message
 
 from bot.config import get_settings
 from bot.db.database import Database, Punishment
@@ -38,18 +38,20 @@ MODERATION_SYSTEM = """Ты — AI-модератор Telegram-чата. Ана�
 3. Если правила требуют наказания, но этика позволяет простить — выдай помилование с устным предупреждением
 4. При наказании укажи конкретные пункты/названия правил
 5. Укажи user_id тех, кто может снять наказание (пострадавшие, адресаты оскорблений)
+6. Укажи affected_users — кому адресовано нарушение (оскорбление, угроза, хамство в ответ и т.д.)
 
 Ответь ТОЛЬКО валидным JSON:
 {{
   "action": "none" | "pardon" | "punish",
   "violator_user_id": null или число,
   "violator_display": "имя/username нарушителя или null",
+  "affected_users": [{{"user_id": число, "display": "имя или @username"}}],
   "rule_references": ["п. 3.2 Запрет оскорблений", "..."],
   "punishment_type": null | "warning" | "mute",
   "duration_minutes": null или число (для mute),
   "warning_text": "текст устного предупреждения при помиловании",
   "explanation": "краткое объяснение решения",
-  "can_unpunish_user_ids": [список user_id],
+  "can_unpunish_user_ids": [список user_id — обязательно включи пострадавших из affected_users],
   "reply_to_message_id": id сообщения для ответа
 }}
 
@@ -94,6 +96,7 @@ class ModerationService:
         chat_id: int,
         decision: dict[str, Any],
         message_id: int | None = None,
+        target_message: Message | None = None,
     ) -> Punishment | None:
         action = decision.get("action", "none")
         explanation = decision.get("explanation", "")
@@ -122,7 +125,8 @@ class ModerationService:
             if settings.log_clean_checks:
                 logger.info("Chat %s: no violation (msg %s) — %s", chat_id, message_id, explanation)
             return None
-        can_unpunish = decision.get("can_unpunish_user_ids") or []
+        affected_ids = _extract_affected_user_ids(decision, target_message, violator_id)
+        can_unpunish = _merge_unpunish_ids(decision.get("can_unpunish_user_ids") or [], affected_ids)
 
         if admin_warning:
             display = decision.get("violator_display", str(violator_id))
@@ -180,18 +184,27 @@ class ModerationService:
                 rule_references=rule_refs,
                 explanation=explanation,
                 message_id=reply_id,
-                can_unpunish_ids=[int(x) for x in can_unpunish if x],
+                can_unpunish_ids=can_unpunish,
                 expires_at=expires,
             )
 
             from bot.keyboards.punishment import unpunish_keyboard
 
+            affected_line = await _format_affected_line(bot, chat_id, affected_ids)
+            unpunish_line = await _format_unpunish_line(bot, chat_id, can_unpunish, violator_id)
+
             text = (
                 f"🚫 <b>{ptype_label}{duration_str}</b>\n\n"
                 f"👤 Нарушитель: <b>{display}</b> (<code>{violator_id}</code>)\n"
+            )
+            if affected_line:
+                text += f"{affected_line}\n"
+            text += (
                 f"📜 <b>Правила:</b>\n{rules_str}\n\n"
                 f"💬 {explanation}"
             )
+            if unpunish_line:
+                text += f"\n\n{unpunish_line}"
             sent = await bot.send_message(
                 chat_id,
                 text,
@@ -227,12 +240,18 @@ def format_decision_preview(decision: dict[str, Any]) -> str:
         duration = decision.get("duration_minutes")
         violator = decision.get("violator_display") or decision.get("violator_user_id")
         duration_str = f" на {duration} мин" if duration else ""
-        return (
-            f"🚫 <b>Наказание: {ptype}{duration_str}</b>\n\n"
-            f"👤 Нарушитель: <b>{violator}</b>\n"
-            f"📜 Правила: {rules_str}\n\n"
-            f"💬 {explanation}"
-        )
+        affected = _format_affected_preview(decision.get("affected_users") or [])
+        lines = [
+            f"🚫 <b>Наказание: {ptype}{duration_str}</b>\n",
+            f"👤 Нарушитель: <b>{violator}</b>",
+        ]
+        if affected:
+            lines.append(f"🎯 В отношении: {affected}")
+        can_unpunish = decision.get("can_unpunish_user_ids") or []
+        if can_unpunish:
+            lines.append(f"🕊 Снять могут user_id: {', '.join(str(x) for x in can_unpunish)}")
+        lines.append(f"\n💬 {explanation}")
+        return "\n".join(lines)
     return f"❓ Неизвестное действие: <code>{action}</code>\n\n💬 {explanation}"
 
 
@@ -258,3 +277,75 @@ async def _is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
         logger.warning("Could not check admin status for user %s in chat %s", user_id, chat_id)
         return False
     return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))
+
+
+def _extract_affected_user_ids(
+    decision: dict[str, Any],
+    target_message: Message | None,
+    violator_id: int | None,
+) -> list[int]:
+    ids: list[int] = []
+    for item in decision.get("affected_users") or []:
+        if isinstance(item, dict) and item.get("user_id"):
+            ids.append(int(item["user_id"]))
+        elif isinstance(item, int):
+            ids.append(item)
+
+    if not ids and target_message and target_message.reply_to_message:
+        reply_user = target_message.reply_to_message.from_user
+        if reply_user and not reply_user.is_bot:
+            ids.append(reply_user.id)
+
+    if violator_id:
+        ids = [uid for uid in ids if uid != violator_id]
+    return list(dict.fromkeys(ids))
+
+
+def _merge_unpunish_ids(can_unpunish: list, affected_ids: list[int]) -> list[int]:
+    merged: list[int] = []
+    for raw in list(can_unpunish) + affected_ids:
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if uid not in merged:
+            merged.append(uid)
+    return merged
+
+
+def _format_affected_preview(affected_users: list) -> str:
+    parts = []
+    for item in affected_users:
+        if isinstance(item, dict):
+            display = item.get("display") or item.get("user_id")
+            parts.append(str(display))
+        else:
+            parts.append(str(item))
+    return ", ".join(parts)
+
+
+async def _user_mention(bot: Bot, chat_id: int, user_id: int) -> str:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        user = member.user
+        label = f"@{user.username}" if user.username else user.full_name
+    except Exception:
+        label = "пользователь"
+    return f'<a href="tg://user?id={user_id}">{label}</a>'
+
+
+async def _format_affected_line(bot: Bot, chat_id: int, user_ids: list[int]) -> str:
+    if not user_ids:
+        return ""
+    mentions = [await _user_mention(bot, chat_id, uid) for uid in user_ids]
+    return f"🎯 <b>В отношении:</b> {', '.join(mentions)}"
+
+
+async def _format_unpunish_line(
+    bot: Bot, chat_id: int, user_ids: list[int], violator_id: int | None
+) -> str:
+    allowed = [uid for uid in user_ids if uid != violator_id]
+    if not allowed:
+        return "🕊 <b>Снять наказание</b> могут администраторы чата (кнопка ниже)"
+    mentions = [await _user_mention(bot, chat_id, uid) for uid in allowed]
+    return f"🕊 <b>Снять наказание</b> могут: {', '.join(mentions)} (кнопка ниже)"
