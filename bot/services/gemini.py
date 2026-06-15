@@ -51,12 +51,22 @@ class GeminiService:
       self._lock = asyncio.Lock()
       self._exhausted: set[tuple[int, str]] = set()
       self._model_notes: dict[tuple[int, str], str] = {}
+      self._refresh_task: asyncio.Task | None = None
 
   def start(self) -> None:
       if self._worker_task is None:
           self._worker_task = asyncio.create_task(self._worker())
+      if self._refresh_task is None:
+          self._refresh_task = asyncio.create_task(self._refresh_limits_loop())
 
   async def stop(self) -> None:
+      if self._refresh_task:
+          self._refresh_task.cancel()
+          try:
+              await self._refresh_task
+          except asyncio.CancelledError:
+              pass
+          self._refresh_task = None
       if self._worker_task:
           await self._queue.put(None)
           await self._worker_task
@@ -86,6 +96,34 @@ class GeminiService:
                   item.future.set_exception(exc)
           finally:
               self._queue.task_done()
+
+  async def _refresh_limits_loop(self) -> None:
+      interval_sec = max(self.settings.limits_refresh_minutes, 5) * 60
+      while True:
+          await asyncio.sleep(interval_sec)
+          try:
+              await self.refresh_model_limits()
+          except Exception:
+              logger.exception("Gemini periodic limits refresh failed")
+
+  async def refresh_model_limits(self) -> int:
+      """Re-check exhausted models; clear those whose daily quota recovered."""
+      usage = await self.db.get_gemini_usage_stats()
+      cleared = 0
+      for key in list(self._exhausted):
+          used = usage.get(key, 0)
+          if used < self.settings.rpd_per_model:
+              self._exhausted.discard(key)
+              self._model_notes.pop(key, None)
+              cleared += 1
+      for key in list(self._model_notes.keys()):
+          if key not in self._exhausted:
+              used = usage.get(key, 0)
+              if used < self.settings.rpd_per_model:
+                  self._model_notes.pop(key, None)
+      if cleared:
+          logger.info("Gemini limits refresh: %s model(s) available again", cleared)
+      return cleared
 
   async def _wait_for_rpm_slot(self) -> None:
       async with self._lock:
@@ -235,6 +273,7 @@ class GeminiService:
               )
           lines.append("")
       lines.append(f"{E['info']} Сброс RPD: полночь PT (08:00 UTC)")
+      lines.append(f"{E['clock']} Проверка лимитов: каждые <b>{self.settings.limits_refresh_minutes}</b> мин")
       return "\n".join(lines)
 
 

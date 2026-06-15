@@ -105,10 +105,30 @@ class ModerationService:
         violator_id = decision.get("violator_user_id")
         reply_id = decision.get("reply_to_message_id")
 
+        owner_silent_skip = action in ("punish", "pardon") and await _should_skip_for_chat_owner(
+            bot, chat_id, violator_id, target_message
+        )
+        if owner_silent_skip:
+            await self.db.log_moderation(
+                chat_id=chat_id,
+                message_id=message_id or reply_id,
+                action="none",
+                explanation=f"{explanation} [владелец чата: без сообщения]",
+                rule_references=rule_refs,
+            )
+            logger.info(
+                "Chat %s: skipped %s for chat owner (msg %s)",
+                chat_id,
+                action,
+                message_id or reply_id,
+            )
+            return None
+
         admin_warning = (
             action == "punish"
             and violator_id
             and await _is_chat_admin(bot, chat_id, violator_id)
+            and not await _is_chat_owner(bot, chat_id, violator_id)
         )
         log_action = "pardon" if admin_warning else action
         log_explanation = f"{explanation} [админ: только предупреждение]" if admin_warning else explanation
@@ -341,6 +361,29 @@ async def _is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
         logger.warning("Could not check admin status for user %s in chat %s", user_id, chat_id)
         return False
     return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))
+
+
+async def _is_chat_owner(bot: Bot, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        logger.warning("Could not check owner status for user %s in chat %s", user_id, chat_id)
+        return False
+    return isinstance(member, ChatMemberOwner)
+
+
+async def _should_skip_for_chat_owner(
+    bot: Bot,
+    chat_id: int,
+    violator_id: int | None,
+    target_message: Message | None,
+) -> bool:
+    user_id = violator_id
+    if not user_id and target_message and target_message.from_user and not target_message.from_user.is_bot:
+        user_id = target_message.from_user.id
+    if not user_id:
+        return False
+    return await _is_chat_owner(bot, chat_id, user_id)
 
 
 def _extract_affected_user_ids(
