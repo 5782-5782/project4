@@ -6,13 +6,14 @@ from aiogram.enums import ChatType
 from aiogram.types import InlineKeyboardMarkup, Message
 
 from bot.db.database import Database
+from bot.keyboards.punishment import punishments_history_keyboard
+from bot.utils.access import is_owner
+from bot.utils.forum_topic import topic_send_kwargs
 
 logger = logging.getLogger(__name__)
 
 # Telegram Bot API: answerCallbackQuery text max length when show_alert=True
 CALLBACK_ALERT_TEXT_LIMIT = 200
-from bot.keyboards.punishment import punishments_history_keyboard
-from bot.utils.access import is_owner
 
 
 def get_punishments_list_back(markup: InlineKeyboardMarkup | None) -> str | None:
@@ -61,19 +62,34 @@ async def build_punishments_list_view(
     return text, markup
 
 
+def _build_reason_text(explanation: str, clicked_by: str | None) -> str:
+    reason = (explanation or "").strip() or "Причина не указана."
+    if clicked_by:
+        return f"Нажал: {clicked_by}\n\n{reason}"
+    return reason
+
+
 async def deliver_punishment_reason(
     bot: Bot,
     chat_id: int,
     explanation: str,
     callback_answer,
+    *,
+    source_message: Message | None = None,
+    clicked_by: str | None = None,
 ) -> None:
-    reason = (explanation or "").strip() or "Причина не указана."
-    if len(reason) <= CALLBACK_ALERT_TEXT_LIMIT:
-        await callback_answer(reason, show_alert=True)
+    full_text = _build_reason_text(explanation, clicked_by)
+    if len(full_text) <= CALLBACK_ALERT_TEXT_LIMIT:
+        await callback_answer(full_text, show_alert=True)
         return
 
     await callback_answer()
-    sent = await bot.send_message(chat_id, f"💬 {reason}")
+    chat_text = f"💬 {full_text}"
+    sent = await bot.send_message(
+        chat_id,
+        chat_text,
+        **topic_send_kwargs(source_message),
+    )
     asyncio.create_task(_delete_message_later(sent, delay_seconds=10))
 
 

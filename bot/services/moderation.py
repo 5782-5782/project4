@@ -10,6 +10,7 @@ from bot.config import get_settings
 from bot.db.database import Database, Punishment
 from bot.services.context import ContextBuilder, ModerationContext, BatchModerationContext
 from bot.services.gemini import GeminiService, parse_moderation_response
+from bot.utils.forum_topic import topic_send_kwargs
 from bot.utils.punishment_time import format_punishment_moment
 
 logger = logging.getLogger(__name__)
@@ -341,6 +342,7 @@ class ModerationService:
                 text,
                 reply_to_message_id=reply_id,
                 reply_markup=history_only_keyboard(warning_id) if warning_id else None,
+                **topic_send_kwargs(target_message),
             )
             return None
 
@@ -375,6 +377,7 @@ class ModerationService:
                 text,
                 reply_to_message_id=reply_id,
                 reply_markup=history_only_keyboard(warning_id) if warning_id else None,
+                **topic_send_kwargs(target_message),
             )
             return None
 
@@ -428,6 +431,7 @@ class ModerationService:
                 text,
                 reply_to_message_id=reply_id,
                 reply_markup=unpunish_keyboard(punishment_id),
+                **topic_send_kwargs(target_message),
             )
             return await self.db.get_punishment(punishment_id)
 
