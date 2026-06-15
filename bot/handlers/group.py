@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwner, Message
 
 from bot.db.database import Database
@@ -17,6 +17,16 @@ from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+class ReplyToSetrulesFilter(BaseFilter):
+    """Only match replies to the bot's /setrules prompt."""
+
+    async def __call__(self, message: Message) -> bool:
+        reply = message.reply_to_message
+        if not reply or not reply.text:
+            return False
+        return "/setrules" in reply.text
 
 
 async def _can_manage(message: Message, db: Database) -> bool:
@@ -121,12 +131,8 @@ async def cmd_setrules(message: Message, db: Database) -> None:
     )
 
 
-@router.message(F.reply_to_message, F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
+@router.message(ReplyToSetrulesFilter(), F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 async def rules_reply(message: Message, db: Database) -> None:
-    if not message.reply_to_message or not message.reply_to_message.text:
-        return
-    if "/setrules" not in message.reply_to_message.text:
-        return
     if not await _can_manage(message, db):
         return
 

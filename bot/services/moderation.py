@@ -111,6 +111,17 @@ class ModerationService:
             settings = get_settings()
             if settings.log_clean_checks:
                 logger.info("Chat %s: no violation (msg %s) — %s", chat_id, message_id, explanation)
+            if settings.react_on_check and message_id:
+                try:
+                    from aiogram.types import ReactionTypeEmoji
+
+                    await bot.set_message_reaction(
+                        chat_id,
+                        message_id,
+                        reaction=[ReactionTypeEmoji(emoji="👀")],
+                    )
+                except Exception:
+                    logger.debug("Could not set check reaction on msg %s", message_id, exc_info=True)
             return None
         can_unpunish = decision.get("can_unpunish_user_ids") or []
         reply_id = decision.get("reply_to_message_id")

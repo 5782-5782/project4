@@ -21,6 +21,10 @@ class GeminiAuthError(Exception):
     """Invalid or unsupported Gemini API credentials."""
 
 
+class ModelUnavailableError(Exception):
+    """Temporary or plan-specific model unavailability (503, overloaded)."""
+
+
 class RPMThrottle(Exception):
     """Per-minute limit hit — caller should retry later."""
 
@@ -46,6 +50,7 @@ class GeminiService:
       self._rpm_timestamps: list[float] = []
       self._lock = asyncio.Lock()
       self._exhausted: set[tuple[int, str]] = set()
+      self._model_notes: dict[tuple[int, str], str] = {}
 
   def start(self) -> None:
       if self._worker_task is None:
@@ -114,20 +119,29 @@ class GeminiService:
                   self._exhausted.add((project_idx, model))
                   continue
               try:
+                  logger.info("Gemini try project=%s model=%s", project_idx, model)
                   text = await self._request(api_key, model, prompt)
                   await self.db.record_gemini_usage(project_idx, model, admin_user_id)
+                  self._model_notes.pop((project_idx, model), None)
                   return text
               except GeminiAuthError as exc:
                   auth_errors += 1
                   last_error = exc
+                  self._model_notes[(project_idx, model)] = "неверный ключ"
                   logger.warning("Gemini auth error project=%s model=%s: %s", project_idx, model, exc)
                   break
+              except ModelUnavailableError as exc:
+                  last_error = exc
+                  self._model_notes[(project_idx, model)] = str(exc)
+                  logger.warning("Gemini unavailable project=%s model=%s: %s", project_idx, model, exc)
               except RateLimitExhausted as exc:
                   self._exhausted.add((project_idx, model))
+                  self._model_notes[(project_idx, model)] = "лимит исчерпан"
                   last_error = exc
               except Exception as exc:
                   if _is_daily_limit_error(exc):
                       self._exhausted.add((project_idx, model))
+                      self._model_notes[(project_idx, model)] = "дневная квота"
                   last_error = exc
                   logger.warning("Gemini error project=%s model=%s: %s", project_idx, model, exc)
 
@@ -165,7 +179,18 @@ class GeminiService:
               if resp.status in (401, 403):
                   raise GeminiAuthError(f"Gemini HTTP {resp.status}: {body}")
               if resp.status == 429:
-                  raise RateLimitExhausted(f"Rate limit on {model}")
+                  err = body.get("error", {}) if isinstance(body, dict) else {}
+                  msg = str(err.get("message", "")).lower()
+                  if "quota" in msg or "resource_exhausted" in str(err.get("status", "")).lower():
+                      raise RateLimitExhausted(f"Quota on {model}: {err.get('message', body)}")
+                  raise ModelUnavailableError(f"Временный лимит {model}")
+              if resp.status == 503:
+                  raise ModelUnavailableError(f"Модель {model} перегружена (503)")
+              if resp.status == 400:
+                  err = body.get("error", {}) if isinstance(body, dict) else {}
+                  msg = str(err.get("message", ""))
+                  if "location is not supported" in msg.lower():
+                      raise GeminiAuthError(f"Регион не поддерживается: {msg}")
               if resp.status != 200:
                   raise RuntimeError(f"Gemini HTTP {resp.status}: {body}")
               try:
@@ -202,9 +227,11 @@ class GeminiService:
               exhausted = (project_idx, model) in self._exhausted or used >= total
               marker = "🔴" if exhausted else "🟢"
               short = model.replace("gemini-", "").replace("-preview", "")
+              note = self._model_notes.get((project_idx, model), "")
+              note_str = f" — <i>{note}</i>" if note else ""
               lines.append(
                   f"  {marker} <code>{short}</code> {bar(used, total)} "
-                  f"<b>{used}</b>/{total} ({pct}%) {status}"
+                  f"<b>{used}</b>/{total} ({pct}%) {status}{note_str}"
               )
           lines.append("")
       lines.append(f"{E['info']} Сброс RPD: полночь PT (08:00 UTC)")
