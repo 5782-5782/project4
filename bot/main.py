@@ -56,9 +56,9 @@ async def main() -> None:
         ServicesMiddleware(db, gemini, moderation_svc, batch_processor)
     )
 
+    dp.include_router(chats.router)
     dp.include_router(admin.router)
     dp.include_router(chat_register.router)
-    dp.include_router(chats.router)
     dp.include_router(group.router)
     dp.include_router(moderation.router)
 

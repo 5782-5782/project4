@@ -3,7 +3,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, Message
 
 from bot.commands import build_help_text, setup_bot_commands
@@ -16,6 +16,15 @@ from bot.utils.access import can_access_dm, is_owner
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+class PrivateNonAdmin(BaseFilter):
+    """Only match private messages from users who are NOT bot admins."""
+
+    async def __call__(self, message: Message, db: Database) -> bool:
+        if not message.from_user:
+            return False
+        return not await can_access_dm(db, message.from_user.id)
 
 
 @router.message(Command("start"), F.chat.type == ChatType.PRIVATE)
@@ -41,13 +50,11 @@ async def cmd_start(message: Message, db: Database, gemini: GeminiService) -> No
     await message.answer(f"{E['block']} Не лезь, бот не для вас.")
 
 
-@router.message(F.chat.type == ChatType.PRIVATE)
+@router.message(F.chat.type == ChatType.PRIVATE, PrivateNonAdmin())
 async def private_messages(message: Message, db: Database) -> None:
     if not message.from_user:
         return
     uid = message.from_user.id
-    if await can_access_dm(db, uid):
-        return
     if await db.is_dm_banned(uid):
         return
     banned = await db.record_dm_message(uid)

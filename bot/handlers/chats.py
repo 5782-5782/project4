@@ -176,7 +176,7 @@ async def cb_chat_rules(callback: CallbackQuery, state: FSMContext, db: Database
     preview = (settings.get("rules_text") or "")[:500]
     await callback.message.edit_text(
         f"{E['rules']} <b>Правила чата</b>\n\n"
-        f"Отправьте новый текст правил следующим сообщением.\n\n"
+        f"Отправьте новый текст правил следующим сообщением или .txt файлом.\n\n"
         f"<b>Текущие:</b>\n<pre>{preview or '(пусто)'}</pre>",
     )
     await callback.answer()
@@ -184,18 +184,33 @@ async def cb_chat_rules(callback: CallbackQuery, state: FSMContext, db: Database
 
 @router.message(StateFilter(AdminStates.waiting_rules), F.chat.type == ChatType.PRIVATE)
 async def receive_rules(message: Message, state: FSMContext, db: Database) -> None:
-    if not message.from_user or not message.text:
+    if not message.from_user:
         return
+
+    rules_text = ""
+    if message.document:
+        if not message.document.file_name or not message.document.file_name.endswith(".txt"):
+            await message.answer("Нужен файл .txt с правилами.")
+            return
+        file = await message.bot.get_file(message.document.file_id)
+        data = await message.bot.download_file(file.file_path)
+        rules_text = data.read().decode("utf-8", errors="replace")
+    elif message.text:
+        rules_text = message.text
+    else:
+        await message.answer("Отправьте текст правил или .txt файл.")
+        return
+
     data = await state.get_data()
     chat_id = data.get("chat_id")
     if not chat_id or not await can_manage_chat(db, message.from_user.id, chat_id):
         await state.clear()
         return
-    await db.update_chat_rules(chat_id, message.text)
+    await db.update_chat_rules(chat_id, rules_text)
     await state.clear()
     owner = await is_owner(message.from_user.id)
     await message.answer(
-        f"{E['check']} Правила обновлены ({len(message.text)} символов)",
+        f"{E['check']} Правила обновлены ({len(rules_text)} символов)",
         reply_markup=admin_main_keyboard(owner),
     )
 
