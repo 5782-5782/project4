@@ -10,6 +10,7 @@ from bot.db.database import Database
 from bot.keyboards.punishment import unpunish_keyboard
 from bot.services.batch import BatchProcessor
 from bot.services.context import ContextBuilder
+from bot.services.gemini import GeminiAuthError, RateLimitExhausted
 from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
@@ -76,6 +77,19 @@ async def cmd_modtest(
         preview = format_decision_preview(decision)
         await status.edit_text(
             f"{E['robot']} <b>Тест ИИ-модерации</b> (наказание не применяется)\n\n{preview}"
+        )
+    except GeminiAuthError as exc:
+        logger.warning("modtest auth failed chat=%s: %s", message.chat.id, exc)
+        await status.edit_text(
+            f"{E['ban']} <b>Ключ Gemini не работает</b>\n\n"
+            f"{exc}\n\n"
+            f"<i>После замены ключа: sudo bot restart mod</i>"
+        )
+    except RateLimitExhausted as exc:
+        logger.warning("modtest quota failed chat=%s: %s", message.chat.id, exc)
+        await status.edit_text(
+            f"{E['ban']} <b>Лимит Gemini исчерпан</b>\n\n"
+            f"Попробуйте позже или добавьте второй API-ключ в secrets.json."
         )
     except Exception as exc:
         logger.exception("modtest failed chat=%s", message.chat.id)

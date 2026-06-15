@@ -17,6 +17,10 @@ class RateLimitExhausted(Exception):
     """All models and projects exhausted for today."""
 
 
+class GeminiAuthError(Exception):
+    """Invalid or unsupported Gemini API credentials."""
+
+
 class RPMThrottle(Exception):
     """Per-minute limit hit — caller should retry later."""
 
@@ -94,8 +98,12 @@ class GeminiService:
 
   async def _call_with_fallback(self, prompt: str, admin_user_id: int | None = None) -> str:
       keys = self._api_keys()
+      if not keys:
+          raise GeminiAuthError("Gemini API keys are not configured in config/secrets.json")
+
       usage = await self.db.get_gemini_usage_stats()
       last_error: Exception | None = None
+      auth_errors = 0
 
       for project_idx, api_key in enumerate(keys):
           for model in self.settings.gemini_models:
@@ -109,6 +117,11 @@ class GeminiService:
                   text = await self._request(api_key, model, prompt)
                   await self.db.record_gemini_usage(project_idx, model, admin_user_id)
                   return text
+              except GeminiAuthError as exc:
+                  auth_errors += 1
+                  last_error = exc
+                  logger.warning("Gemini auth error project=%s model=%s: %s", project_idx, model, exc)
+                  break
               except RateLimitExhausted as exc:
                   self._exhausted.add((project_idx, model))
                   last_error = exc
@@ -117,6 +130,13 @@ class GeminiService:
                       self._exhausted.add((project_idx, model))
                   last_error = exc
                   logger.warning("Gemini error project=%s model=%s: %s", project_idx, model, exc)
+
+      if auth_errors >= len(keys):
+          raise GeminiAuthError(
+              "Неверный или просроченный ключ Gemini API. "
+              "Создайте новый на https://aistudio.google.com/apikey "
+              "и обновите config/secrets.json → gemini_api_keys"
+          ) from last_error
 
       raise RateLimitExhausted("All Gemini models and projects exhausted") from last_error
 
@@ -137,11 +157,13 @@ class GeminiService:
       async with self._get_session() as session:
           async with session.post(
               url,
-              params={"key": api_key},
+              headers={"x-goog-api-key": api_key},
               json=payload,
               timeout=aiohttp.ClientTimeout(total=90),
           ) as resp:
               body = await resp.json()
+              if resp.status in (401, 403):
+                  raise GeminiAuthError(f"Gemini HTTP {resp.status}: {body}")
               if resp.status == 429:
                   raise RateLimitExhausted(f"Rate limit on {model}")
               if resp.status != 200:
