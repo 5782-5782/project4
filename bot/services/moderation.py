@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aiogram import Bot
-from aiogram.types import ChatPermissions
+from aiogram.types import ChatMemberAdministrator, ChatMemberOwner, ChatPermissions
 
 from bot.config import get_settings
 from bot.db.database import Database, Punishment
@@ -98,12 +98,22 @@ class ModerationService:
         action = decision.get("action", "none")
         explanation = decision.get("explanation", "")
         rule_refs = decision.get("rule_references") or []
+        violator_id = decision.get("violator_user_id")
+        reply_id = decision.get("reply_to_message_id")
+
+        admin_warning = (
+            action == "punish"
+            and violator_id
+            and await _is_chat_admin(bot, chat_id, violator_id)
+        )
+        log_action = "pardon" if admin_warning else action
+        log_explanation = f"{explanation} [админ: только предупреждение]" if admin_warning else explanation
 
         await self.db.log_moderation(
             chat_id=chat_id,
-            message_id=message_id or decision.get("reply_to_message_id"),
-            action=action,
-            explanation=explanation,
+            message_id=message_id or reply_id,
+            action=log_action,
+            explanation=log_explanation,
             rule_references=rule_refs,
         )
 
@@ -111,21 +121,25 @@ class ModerationService:
             settings = get_settings()
             if settings.log_clean_checks:
                 logger.info("Chat %s: no violation (msg %s) — %s", chat_id, message_id, explanation)
-            if settings.react_on_check and message_id:
-                try:
-                    from aiogram.types import ReactionTypeEmoji
-
-                    await bot.set_message_reaction(
-                        chat_id,
-                        message_id,
-                        reaction=[ReactionTypeEmoji(emoji="👀")],
-                    )
-                except Exception:
-                    logger.debug("Could not set check reaction on msg %s", message_id, exc_info=True)
             return None
         can_unpunish = decision.get("can_unpunish_user_ids") or []
-        reply_id = decision.get("reply_to_message_id")
-        violator_id = decision.get("violator_user_id")
+
+        if admin_warning:
+            display = decision.get("violator_display", str(violator_id))
+            rules_str = "; ".join(rule_refs) if rule_refs else "общие нормы"
+            warning = (
+                decision.get("warning_text")
+                or "Администратор чата нарушил правила. Мут не применяется — только предупреждение."
+            )
+            text = (
+                f"⚠️ <b>Предупреждение администратору</b>\n\n"
+                f"👤 <b>{display}</b> (<code>{violator_id}</code>)\n\n"
+                f"{warning}\n\n"
+                f"📜 <b>Правила:</b> {rules_str}\n"
+                f"💬 {explanation}"
+            )
+            await bot.send_message(chat_id, text, reply_to_message_id=reply_id)
+            return None
 
         if action == "pardon":
             warning = decision.get("warning_text") or "Вы нарушили правила, но вас решили помиловать. Впредь будьте осторожны."
@@ -235,3 +249,12 @@ def _format_past_punishments(punishments: list[Punishment]) -> str:
             f"правила: {refs_str}, статус: {active}, дата: {p.created_at[:10]}"
         )
     return "\n".join(lines)
+
+
+async def _is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        logger.warning("Could not check admin status for user %s in chat %s", user_id, chat_id)
+        return False
+    return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))

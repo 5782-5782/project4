@@ -42,7 +42,6 @@ class Settings:
         self.spam_threshold: int = int(settings.get("spam_threshold", 5))
         self.spam_window_seconds: int = int(settings.get("spam_window_seconds", 60))
         self.log_clean_checks: bool = bool(settings.get("log_clean_checks", False))
-        self.react_on_check: bool = bool(settings.get("react_on_check", False))
 
         self.proxy: dict[str, Any] = secrets.get("proxy", {})
 
