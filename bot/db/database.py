@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator
 import aiosqlite
 
 from bot.config import get_settings
+from bot.services.chat_history import StoredChatMessage
 
 
 @dataclass
@@ -138,6 +139,37 @@ class Database:
             await db.commit()
         except Exception:
             pass
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_rules_input (
+                user_id INTEGER PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                full_name TEXT NOT NULL DEFAULT '',
+                text TEXT NOT NULL,
+                reply_to_message_id INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (chat_id, message_id)
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_chat
+                ON chat_messages(chat_id, message_id)
+            """
+        )
+        await db.commit()
 
     async def register_chat(self, chat_id: int, title: str, owner_admin_id: int) -> None:
         async with self.connection() as db:
@@ -299,6 +331,35 @@ class Database:
             )
             await db.commit()
 
+    async def set_pending_rules_input(self, user_id: int, chat_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO pending_rules_input (user_id, chat_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    chat_id = excluded.chat_id,
+                    created_at = excluded.created_at
+                """,
+                (user_id, chat_id, _now_iso()),
+            )
+            await db.commit()
+
+    async def get_pending_rules_input(self, user_id: int) -> int | None:
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    "SELECT chat_id FROM pending_rules_input WHERE user_id = ?",
+                    (user_id,),
+                )
+            ).fetchone()
+            return int(row["chat_id"]) if row else None
+
+    async def clear_pending_rules_input(self, user_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute("DELETE FROM pending_rules_input WHERE user_id = ?", (user_id,))
+            await db.commit()
+
     async def update_batch_interval(self, chat_id: int, interval: int) -> None:
         await self.get_chat_settings(chat_id)
         async with self.connection() as db:
@@ -329,6 +390,7 @@ class Database:
         message_id: int | None,
         can_unpunish_ids: list[int],
         expires_at: datetime | None,
+        active: bool = True,
     ) -> int:
         async with self.connection() as db:
             cur = await db.execute(
@@ -337,7 +399,7 @@ class Database:
                     chat_id, user_id, username, punishment_type, duration_minutes,
                     rule_references, explanation, message_id, can_unpunish_ids,
                     active, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -349,6 +411,7 @@ class Database:
                     explanation,
                     message_id,
                     json.dumps(can_unpunish_ids),
+                    1 if active else 0,
                     _now_iso(),
                     expires_at.isoformat() if expires_at else None,
                 ),
@@ -364,6 +427,35 @@ class Database:
                 await db.execute("SELECT * FROM punishments WHERE id = ?", (punishment_id,))
             ).fetchone()
             return _row_to_punishment(row) if row else None
+
+    async def delete_punishment(self, punishment_id: int) -> bool:
+        async with self.connection() as db:
+            cur = await db.execute("DELETE FROM punishments WHERE id = ?", (punishment_id,))
+            await db.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def get_chat_punishment_history(
+        self,
+        chat_id: int,
+        limit: int = 30,
+        days: int | None = None,
+    ) -> list[Punishment]:
+        settings = get_settings()
+        retention_days = settings.punishment_history_days if days is None else days
+        since = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        async with self.connection() as db:
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT * FROM punishments
+                    WHERE chat_id = ? AND created_at >= ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, since, limit),
+                )
+            ).fetchall()
+            return [_row_to_punishment(r) for r in rows]
 
     async def get_punishment(self, punishment_id: int) -> Punishment | None:
         async with self.connection() as db:
@@ -382,28 +474,53 @@ class Database:
             ).fetchall()
             return [_row_to_punishment(r) for r in rows]
 
-    async def get_all_punishments(self, chat_id: int | None = None, limit: int = 50) -> list[Punishment]:
+    async def get_all_punishments(
+        self,
+        chat_id: int | None = None,
+        limit: int = 50,
+        days: int | None = None,
+    ) -> list[Punishment]:
+        settings = get_settings()
+        retention_days = settings.punishment_history_days if days is None else days
+        since = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         async with self.connection() as db:
             if chat_id is not None:
                 rows = await (
                     await db.execute(
-                        "SELECT * FROM punishments WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?",
-                        (chat_id, limit),
+                        """
+                        SELECT * FROM punishments
+                        WHERE chat_id = ? AND created_at >= ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                        """,
+                        (chat_id, since, limit),
                     )
                 ).fetchall()
             else:
                 rows = await (
                     await db.execute(
-                        "SELECT * FROM punishments ORDER BY created_at DESC LIMIT ?",
-                        (limit,),
+                        """
+                        SELECT * FROM punishments
+                        WHERE created_at >= ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                        """,
+                        (since, limit),
                     )
                 ).fetchall()
             return [_row_to_punishment(r) for r in rows]
 
-    async def get_punishments_for_users(self, chat_id: int, user_ids: list[int], days: int = 30) -> list[Punishment]:
+    async def get_punishments_for_users(
+        self,
+        chat_id: int,
+        user_ids: list[int],
+        days: int | None = None,
+    ) -> list[Punishment]:
         if not user_ids:
             return []
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        settings = get_settings()
+        retention_days = settings.punishment_history_days if days is None else days
+        since = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         placeholders = ",".join("?" * len(user_ids))
         query = f"""
             SELECT * FROM punishments
@@ -491,6 +608,133 @@ class Database:
                 await db.commit()
                 return True
         return False
+
+    async def save_chat_message(self, msg: StoredChatMessage) -> None:
+        settings = get_settings()
+        keep = settings.chat_history_limit
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO chat_messages (
+                    chat_id, message_id, user_id, username, full_name,
+                    text, reply_to_message_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                    text = excluded.text,
+                    reply_to_message_id = excluded.reply_to_message_id
+                """,
+                (
+                    msg.chat_id,
+                    msg.message_id,
+                    msg.user_id,
+                    msg.username,
+                    msg.full_name,
+                    msg.text,
+                    msg.reply_to_message_id,
+                    _now_iso(),
+                ),
+            )
+            await db.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE chat_id = ? AND message_id < (
+                    SELECT message_id FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY message_id DESC
+                    LIMIT 1 OFFSET ?
+                )
+                """,
+                (msg.chat_id, msg.chat_id, keep),
+            )
+            await db.commit()
+
+    async def save_chat_messages_from_telegram(self, message) -> None:
+        from bot.services.chat_history import from_telegram, message_text
+
+        chat_id = message.chat.id
+        if message.reply_to_message and message_text(message.reply_to_message):
+            reply = from_telegram(message.reply_to_message, chat_id=chat_id)
+            if reply:
+                await self.save_chat_message(reply)
+        stored = from_telegram(message)
+        if stored:
+            await self.save_chat_message(stored)
+
+    async def get_chat_messages(self, chat_id: int, limit: int | None = None) -> list:
+        from bot.services.chat_history import StoredChatMessage, from_row
+
+        settings = get_settings()
+        lim = limit or settings.chat_history_limit
+        async with self.connection() as db:
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT * FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY message_id DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, lim),
+                )
+            ).fetchall()
+        items = [from_row(r) for r in rows]
+        items.reverse()
+        return items
+
+    async def get_chat_message(self, chat_id: int, message_id: int):
+        from bot.services.chat_history import from_row
+
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    "SELECT * FROM chat_messages WHERE chat_id = ? AND message_id = ?",
+                    (chat_id, message_id),
+                )
+            ).fetchone()
+        return from_row(row) if row else None
+
+    async def was_message_moderated(self, chat_id: int, message_id: int) -> bool:
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    """
+                    SELECT 1 FROM moderation_log
+                    WHERE chat_id = ? AND message_id = ?
+                    LIMIT 1
+                    """,
+                    (chat_id, message_id),
+                )
+            ).fetchone()
+        return row is not None
+
+    async def clear_test_data(
+        self,
+        *,
+        keep_chats: bool = True,
+        keep_sub_admins: bool = True,
+    ) -> dict[str, int]:
+        """Remove test/operational data. Keeps chat links and sub-admins by default."""
+        tables = [
+            "gemini_usage",
+            "moderation_log",
+            "punishments",
+            "chat_messages",
+            "dm_spam_events",
+            "dm_spam_bans",
+            "pending_rules_input",
+        ]
+        if not keep_chats:
+            tables.extend(["chat_settings", "registered_chats"])
+        if not keep_sub_admins:
+            tables.append("sub_admins")
+
+        counts: dict[str, int] = {}
+        async with self.connection() as db:
+            for table in tables:
+                cur = await db.execute(f"DELETE FROM {table}")
+                counts[table] = cur.rowcount or 0
+            await db.commit()
+        return counts
 
 
 def _now_iso() -> str:

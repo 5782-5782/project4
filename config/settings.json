@@ -3,6 +3,9 @@
   "rpm_limit": 15,
   "rpd_per_model": 1000,
   "default_batch_interval": 30,
+  "batch_max_messages": 50,
+  "punishment_history_days": 30,
+  "chat_history_limit": 200,
   "database_path": "data/bot.db",
   "spam_ban_days": 7,
   "spam_threshold": 5,
@@ -14,5 +17,6 @@
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite-preview"
   ],
-  "log_clean_checks": false
+  "log_clean_checks": false,
+  "limits_refresh_minutes": 30
 }

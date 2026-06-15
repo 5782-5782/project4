@@ -20,6 +20,7 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="setrules", description="Загрузить правила"),
             BotCommand(command="setinterval", description="Интервал батчинга"),
             BotCommand(command="mod", description="Вкл/выкл модерацию"),
+            BotCommand(command="modtest", description="Тест ИИ (ответом на сообщение)"),
         ],
         scope=BotCommandScopeAllGroupChats(),
     )
@@ -41,8 +42,12 @@ def build_help_text(is_owner: bool) -> str:
         f"<b>{E['shield']} В группе</b>",
         "/linkchat — привязать чат к вашему аккаунту",
         "/setrules — загрузить правила (ответом на сообщение бота)",
-        "/setinterval &lt;сек&gt; — интервал батчинга (0 = сразу)",
+        "/setinterval &lt;сек&gt; — слоты батчинга (0 = сразу, 30 = :00/:30 UTC)",
         "/mod on|off — включить/выключить модерацию",
+        "/modtest — тест ИИ (ответом на сообщение)",
+        "",
+        f"<i>Чтобы бот видел все сообщения: @BotFather → /setprivacy → Disable</i>",
+        "/modtest — тест ИИ (ответом на сообщение, без наказания)",
         "/punishments — активные наказания чата",
         "",
         f"<i>Управление чатами также доступно через /admin → Мои чаты</i>",
@@ -52,6 +57,7 @@ def build_help_text(is_owner: bool) -> str:
             "",
             f"<b>{E['chart']} Только владелец</b>",
             "Панель → Лимиты API, Суб-админы",
+            "/cleardb yes — очистка БД после тестов",
         ]
     else:
         lines += [

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     settings = get_settings()
-    if not settings.bot_token or "YOUR_" in settings.bot_token:
+    if not settings.bot_token or "YOUR_" in settings.bot_token or "PASTE_" in settings.bot_token:
         logger.error("Set bot_token in config/secrets.json")
         sys.exit(1)
 
@@ -50,23 +50,26 @@ async def main() -> None:
         session=bot_session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    batch_processor.start(bot)
+
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.update.middleware(
         ServicesMiddleware(db, gemini, moderation_svc, batch_processor)
     )
 
+    dp.include_router(moderation.router)
     dp.include_router(chats.router)
     dp.include_router(admin.router)
     dp.include_router(chat_register.router)
     dp.include_router(group.router)
-    dp.include_router(moderation.router)
 
     logger.info("Bot starting... Owner ID: %s", settings.owner_id)
     await setup_bot_commands(bot)
     try:
         await dp.start_polling(bot)
     finally:
+        await batch_processor.stop()
         await gemini.stop()
         await bot.session.close()
         if not http_session.closed:

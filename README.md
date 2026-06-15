@@ -47,7 +47,8 @@ python3 -m bot.main
 - `owner_id` — Telegram ID владельца
 - `rpm_limit` — запросов в минуту (15)
 - `rpd_per_model` — лимит на модель/день (1000)
-- `default_batch_interval` — батчинг (30 сек)
+- `default_batch_interval` — интервал слотов батчинга (30 сек → :00 и :30 UTC)
+- `chat_history_limit` — сообщений в БД на чат для контекста ИИ (200)
 - `log_clean_checks` — логировать «не нарушил» в консоль
 
 ## Команды
@@ -57,6 +58,7 @@ python3 -m bot.main
 | `/admin` | ЛС | Панель управления |
 | `/linkchat` | Группа | Привязать чат к аккаунту |
 | `/addadmin <id> <limit>` | ЛС (владелец) | Добавить суб-админа |
+| `/cleardb yes` | ЛС (владелец) | Очистить БД после тестов (лимиты Gemini, наказания) |
 | `/punishments` | Группа | Активные наказания |
 | `/setrules`, `/setinterval`, `/mod` | Группа | Настройки |
 

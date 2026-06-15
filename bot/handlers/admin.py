@@ -4,15 +4,19 @@ import logging
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import BaseFilter, Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.commands import build_help_text, setup_bot_commands
 from bot.db.database import Database
-from bot.handlers.chats import _admin_panel_text
+from bot.handlers.chats import _admin_panel_text, _cancel_rules_input
 from bot.keyboards.admin_kb import admin_main_keyboard
+from bot.keyboards.punishment import punishments_history_keyboard
 from bot.services.gemini import GeminiService
 from bot.ui.emoji import E
+from bot.utils.punishment_time import format_punishment_moment
 from bot.utils.access import can_access_dm, is_owner
+from bot.utils.telegram_edit import safe_edit_message
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -108,18 +112,19 @@ async def cb_limits(callback: CallbackQuery, gemini: GeminiService, db: Database
         await callback.answer("Только владелец", show_alert=True)
         return
     text = await gemini.get_limits_dashboard()
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(True))
+    await safe_edit_message(callback.message, text, admin_main_keyboard(True))
     await callback.answer()
 
 
 @router.callback_query(F.data == "admin:back")
-async def cb_back(callback: CallbackQuery, db: Database, gemini: GeminiService) -> None:
+async def cb_back(callback: CallbackQuery, db: Database, gemini: GeminiService, state: FSMContext) -> None:
     if not callback.from_user or not await can_access_dm(db, callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
+    await _cancel_rules_input(state, db, callback.from_user.id)
     owner = await is_owner(callback.from_user.id)
     text = await _admin_panel_text(db, gemini, callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
+    await safe_edit_message(callback.message, text, admin_main_keyboard(owner))
     await callback.answer()
 
 
@@ -134,9 +139,12 @@ async def cmd_all_punishments(message: Message, db: Database) -> None:
         chats = await db.list_chats_for_admin(message.from_user.id, False)
         punishments = []
         for c in chats:
-            punishments.extend(await db.get_active_punishments(c["chat_id"]))
-    text = _format_punishments_list(punishments, title="Наказания")
-    await message.answer(text, reply_markup=admin_main_keyboard(owner))
+            punishments.extend(await db.get_chat_punishment_history(c["chat_id"], limit=15))
+    text = _format_punishments_list(punishments, title="История наказаний")
+    await message.answer(
+        text,
+        reply_markup=punishments_history_keyboard(punishments, "admin:back"),
+    )
 
 
 @router.callback_query(F.data == "admin:all_punishments")
@@ -151,9 +159,13 @@ async def cb_all_punishments(callback: CallbackQuery, db: Database) -> None:
         chats = await db.list_chats_for_admin(callback.from_user.id, False)
         punishments = []
         for c in chats:
-            punishments.extend(await db.get_active_punishments(c["chat_id"]))
-    text = _format_punishments_list(punishments, title="Наказания")
-    await callback.message.edit_text(text, reply_markup=admin_main_keyboard(owner))
+            punishments.extend(await db.get_chat_punishment_history(c["chat_id"], limit=15))
+    text = _format_punishments_list(punishments, title="История наказаний")
+    await safe_edit_message(
+        callback.message,
+        text,
+        punishments_history_keyboard(punishments, "admin:back"),
+    )
     await callback.answer()
 
 
@@ -170,16 +182,49 @@ async def cmd_addadmin(message: Message, db: Database) -> None:
     await message.answer(f"{E['check']} Суб-админ <code>{user_id}</code> — лимит <b>{limit}</b>/день")
 
 
+@router.message(Command("cleardb"), F.chat.type == ChatType.PRIVATE)
+async def cmd_cleardb(message: Message, db: Database, gemini: GeminiService) -> None:
+    """Owner only: clear test data and Gemini usage counters."""
+    if not message.from_user or not await is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or parts[1].lower() not in ("yes", "all"):
+        await message.answer(
+            f"{E['warn']} <b>Очистка базы после тестов</b>\n\n"
+            f"<code>/cleardb yes</code> — наказания, логи, лимиты Gemini, спам-баны\n"
+            f"(чаты и суб-админы остаются)\n\n"
+            f"<code>/cleardb all</code> — всё, включая привязки чатов и суб-админов"
+        )
+        return
+
+    wipe_all = parts[1].lower() == "all"
+    counts = await db.clear_test_data(keep_chats=not wipe_all, keep_sub_admins=not wipe_all)
+    gemini.reset_runtime_state()
+    total = sum(counts.values())
+    lines = [f"{E['check']} <b>База очищена</b> — удалено строк: <b>{total}</b>\n"]
+    for table, n in sorted(counts.items()):
+        if n:
+            lines.append(f"• <code>{table}</code>: {n}")
+    lines.append("\n<i>Лимиты Gemini в памяти сброшены.</i>")
+    await message.answer("\n".join(lines))
+
+
 def _format_punishments_list(punishments, title: str) -> str:
     if not punishments:
         return f"{E['check']} <b>{title}</b>\n\nНаказаний нет."
     lines = [f"{E['ban']} <b>{title}</b>\n"]
     for p in punishments:
         refs = json.loads(p.rule_references) if p.rule_references.startswith("[") else [p.rule_references]
-        status = "🟢 активно" if p.active else "⚫ снято"
+        status = "🟢 активно" if p.active else "⚫ в истории"
+        type_label = p.punishment_type
+        if type_label == "warning":
+            type_label = "предупреждение"
+        elif type_label == "admin_warning":
+            type_label = "предупр. админу"
         lines.append(
             f"\n<b>#{p.id}</b> чат <code>{p.chat_id}</code> | user <code>{p.user_id}</code>\n"
-            f"Тип: {p.punishment_type} | {status}\n"
+            f"Тип: {type_label} | {status}\n"
+            f"🕐 {format_punishment_moment(p.created_at)}\n"
             f"Правила: {', '.join(refs)}\n"
             f"<i>{p.explanation[:100]}</i>"
         )
