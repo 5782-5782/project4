@@ -180,6 +180,33 @@ async def cmd_addadmin(message: Message, db: Database) -> None:
     await message.answer(f"{E['check']} Суб-админ <code>{user_id}</code> — лимит <b>{limit}</b>/день")
 
 
+@router.message(Command("cleardb"), F.chat.type == ChatType.PRIVATE)
+async def cmd_cleardb(message: Message, db: Database, gemini: GeminiService) -> None:
+    """Owner only: clear test data and Gemini usage counters."""
+    if not message.from_user or not await is_owner(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or parts[1].lower() not in ("yes", "all"):
+        await message.answer(
+            f"{E['warn']} <b>Очистка базы после тестов</b>\n\n"
+            f"<code>/cleardb yes</code> — наказания, логи, лимиты Gemini, спам-баны\n"
+            f"(чаты и суб-админы остаются)\n\n"
+            f"<code>/cleardb all</code> — всё, включая привязки чатов и суб-админов"
+        )
+        return
+
+    wipe_all = parts[1].lower() == "all"
+    counts = await db.clear_test_data(keep_chats=not wipe_all, keep_sub_admins=not wipe_all)
+    gemini.reset_runtime_state()
+    total = sum(counts.values())
+    lines = [f"{E['check']} <b>База очищена</b> — удалено строк: <b>{total}</b>\n"]
+    for table, n in sorted(counts.items()):
+        if n:
+            lines.append(f"• <code>{table}</code>: {n}")
+    lines.append("\n<i>Лимиты Gemini в памяти сброшены.</i>")
+    await message.answer("\n".join(lines))
+
+
 def _format_punishments_list(punishments, title: str) -> str:
     if not punishments:
         return f"{E['check']} <b>{title}</b>\n\nНаказаний нет."

@@ -587,6 +587,34 @@ class Database:
                 return True
         return False
 
+    async def clear_test_data(
+        self,
+        *,
+        keep_chats: bool = True,
+        keep_sub_admins: bool = True,
+    ) -> dict[str, int]:
+        """Remove test/operational data. Keeps chat links and sub-admins by default."""
+        tables = [
+            "gemini_usage",
+            "moderation_log",
+            "punishments",
+            "dm_spam_events",
+            "dm_spam_bans",
+            "pending_rules_input",
+        ]
+        if not keep_chats:
+            tables.extend(["chat_settings", "registered_chats"])
+        if not keep_sub_admins:
+            tables.append("sub_admins")
+
+        counts: dict[str, int] = {}
+        async with self.connection() as db:
+            for table in tables:
+                cur = await db.execute(f"DELETE FROM {table}")
+                counts[table] = cur.rowcount or 0
+            await db.commit()
+        return counts
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

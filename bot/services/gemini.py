@@ -125,6 +125,13 @@ class GeminiService:
           logger.info("Gemini limits refresh: %s model(s) available again", cleared)
       return cleared
 
+  def reset_runtime_state(self) -> None:
+      """Clear in-memory RPM throttle and exhausted-model cache (e.g. after DB wipe)."""
+      self._exhausted.clear()
+      self._model_notes.clear()
+      self._rpm_timestamps.clear()
+      logger.info("Gemini runtime limits cache cleared")
+
   async def _wait_for_rpm_slot(self) -> None:
       async with self._lock:
           now = datetime.now(timezone.utc).timestamp()

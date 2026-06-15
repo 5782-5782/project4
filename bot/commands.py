@@ -57,6 +57,7 @@ def build_help_text(is_owner: bool) -> str:
             "",
             f"<b>{E['chart']} Только владелец</b>",
             "Панель → Лимиты API, Суб-админы",
+            "/cleardb yes — очистка БД после тестов",
         ]
     else:
         lines += [
