@@ -29,5 +29,5 @@ async def group_message(message: Message, batch_processor: BatchProcessor) -> No
         message.message_id,
         message.from_user.id,
     )
-    batch_processor.store_history(message.chat.id, message)
+    await batch_processor.store_history(message)
     await batch_processor.enqueue(message.bot, message)

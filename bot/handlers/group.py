@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwne
 from bot.db.database import Database
 from bot.keyboards.punishment import history_only_keyboard, punishment_done_keyboard
 from bot.services.batch import BatchProcessor
+from bot.services.chat_history import from_telegram
 from bot.services.context import ContextBuilder
 from bot.services.gemini import GeminiAuthError, RateLimitExhausted
 from bot.services.moderation import ModerationService, format_decision_preview
@@ -87,9 +88,16 @@ async def cmd_modtest(
 
     status = await message.answer(f"{E['robot']} Проверяю сообщение через ИИ…")
     try:
-        batch_processor.store_history(message.chat.id, target)
-        history = batch_processor.get_history(message.chat.id)
-        ctx = ContextBuilder().build(target, history)
+        await batch_processor.store_history(message)
+        await batch_processor.store_history(target)
+        history = await batch_processor.get_history(message.chat.id)
+        stored = from_telegram(target) or await db.get_chat_message(
+            message.chat.id, target.message_id
+        )
+        if not stored:
+            await status.edit_text(f"{E['ban']} Не удалось загрузить сообщение для контекста.")
+            return
+        ctx = ContextBuilder().build(stored, history)
         decision = await moderation.analyze(
             message.chat.id,
             settings.get("rules_text", ""),

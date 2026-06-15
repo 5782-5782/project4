@@ -256,6 +256,16 @@ class ModerationService:
         rule_refs = decision.get("rule_references") or []
         violator_id = decision.get("violator_user_id")
         reply_id = decision.get("reply_to_message_id")
+        check_id = message_id or reply_id
+
+        if check_id and await self.db.was_message_moderated(chat_id, check_id):
+            logger.info(
+                "Skip duplicate moderation chat=%s msg=%s action=%s",
+                chat_id,
+                check_id,
+                action,
+            )
+            return None
 
         owner_silent_skip = action in ("punish", "pardon") and await _should_skip_for_chat_owner(
             bot, chat_id, violator_id, target_message

@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator
 import aiosqlite
 
 from bot.config import get_settings
+from bot.services.chat_history import StoredChatMessage
 
 
 @dataclass
@@ -145,6 +146,27 @@ class Database:
                 chat_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL
             )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                full_name TEXT NOT NULL DEFAULT '',
+                text TEXT NOT NULL,
+                reply_to_message_id INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (chat_id, message_id)
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_chat
+                ON chat_messages(chat_id, message_id)
             """
         )
         await db.commit()
@@ -587,6 +609,104 @@ class Database:
                 return True
         return False
 
+    async def save_chat_message(self, msg: StoredChatMessage) -> None:
+        settings = get_settings()
+        keep = settings.chat_history_limit
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO chat_messages (
+                    chat_id, message_id, user_id, username, full_name,
+                    text, reply_to_message_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                    text = excluded.text,
+                    reply_to_message_id = excluded.reply_to_message_id
+                """,
+                (
+                    msg.chat_id,
+                    msg.message_id,
+                    msg.user_id,
+                    msg.username,
+                    msg.full_name,
+                    msg.text,
+                    msg.reply_to_message_id,
+                    _now_iso(),
+                ),
+            )
+            await db.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE chat_id = ? AND message_id < (
+                    SELECT message_id FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY message_id DESC
+                    LIMIT 1 OFFSET ?
+                )
+                """,
+                (msg.chat_id, msg.chat_id, keep),
+            )
+            await db.commit()
+
+    async def save_chat_messages_from_telegram(self, message) -> None:
+        from bot.services.chat_history import from_telegram, message_text
+
+        chat_id = message.chat.id
+        if message.reply_to_message and message_text(message.reply_to_message):
+            reply = from_telegram(message.reply_to_message, chat_id=chat_id)
+            if reply:
+                await self.save_chat_message(reply)
+        stored = from_telegram(message)
+        if stored:
+            await self.save_chat_message(stored)
+
+    async def get_chat_messages(self, chat_id: int, limit: int | None = None) -> list:
+        from bot.services.chat_history import StoredChatMessage, from_row
+
+        settings = get_settings()
+        lim = limit or settings.chat_history_limit
+        async with self.connection() as db:
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT * FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY message_id DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, lim),
+                )
+            ).fetchall()
+        items = [from_row(r) for r in rows]
+        items.reverse()
+        return items
+
+    async def get_chat_message(self, chat_id: int, message_id: int):
+        from bot.services.chat_history import from_row
+
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    "SELECT * FROM chat_messages WHERE chat_id = ? AND message_id = ?",
+                    (chat_id, message_id),
+                )
+            ).fetchone()
+        return from_row(row) if row else None
+
+    async def was_message_moderated(self, chat_id: int, message_id: int) -> bool:
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    """
+                    SELECT 1 FROM moderation_log
+                    WHERE chat_id = ? AND message_id = ?
+                    LIMIT 1
+                    """,
+                    (chat_id, message_id),
+                )
+            ).fetchone()
+        return row is not None
+
     async def clear_test_data(
         self,
         *,
@@ -598,6 +718,7 @@ class Database:
             "gemini_usage",
             "moderation_log",
             "punishments",
+            "chat_messages",
             "dm_spam_events",
             "dm_spam_bans",
             "pending_rules_input",

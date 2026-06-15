@@ -48,7 +48,7 @@ python3 -m bot.main
 - `rpm_limit` — запросов в минуту (15)
 - `rpd_per_model` — лимит на модель/день (1000)
 - `default_batch_interval` — интервал слотов батчинга (30 сек → :00 и :30 UTC)
-- `punishment_history_days` — хранение наказаний для ИИ и истории (30 дней)
+- `chat_history_limit` — сообщений в БД на чат для контекста ИИ (200)
 - `log_clean_checks` — логировать «не нарушил» в консоль
 
 ## Команды

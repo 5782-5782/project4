@@ -1,8 +1,7 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
-from aiogram.types import Message
+from bot.services.chat_history import StoredChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -33,43 +32,42 @@ class BatchModerationContext:
 
 
 class ContextBuilder:
-    """Builds moderation context from chat history."""
+    """Builds moderation context from persisted chat history."""
 
     def __init__(self, history_limit: int = 50, reply_context_above: int = 10) -> None:
         self.history_limit = history_limit
         self.reply_context_above = reply_context_above
 
-    def build(self, target: Message, history: list[Message]) -> ModerationContext:
-        # Filter out messages without text/caption and build index
-        valid_history: list[Message] = []
+    def build(self, target: StoredChatMessage, history: list[StoredChatMessage]) -> ModerationContext:
+        by_id = {m.message_id: m for m in history}
+        by_id[target.message_id] = target
+
+        valid_history: list[StoredChatMessage] = []
         for msg in history:
             if msg.message_id == target.message_id:
                 continue
-            text = _message_text(msg)
-            if text is None:
+            if not msg.text:
                 continue
             valid_history.append(msg)
 
-        # Take last N valid messages before target
         valid_history = valid_history[-self.history_limit :]
         included_ids: set[int] = {m.message_id for m in valid_history}
 
-        # Add reply chain context for target
-        extra: list[Message] = []
-        if target.reply_to_message:
-            replied = target.reply_to_message
-            if replied.message_id not in included_ids and _message_text(replied):
+        extra: list[StoredChatMessage] = []
+        if target.reply_to_message_id:
+            replied = by_id.get(target.reply_to_message_id)
+            if replied and replied.message_id not in included_ids:
                 extra.append(replied)
                 included_ids.add(replied.message_id)
-            # Find messages above replied in history
-            for msg in history:
-                if msg.message_id >= replied.message_id:
-                    break
-            idx = next((i for i, m in enumerate(history) if m.message_id == replied.message_id), -1)
+            ordered = sorted(history, key=lambda m: m.message_id)
+            idx = next(
+                (i for i, m in enumerate(ordered) if m.message_id == target.reply_to_message_id),
+                -1,
+            )
             if idx >= 0:
                 start = max(0, idx - self.reply_context_above)
-                for msg in history[start:idx]:
-                    if msg.message_id not in included_ids and _message_text(msg):
+                for msg in ordered[start:idx]:
+                    if msg.message_id not in included_ids and msg.text:
                         extra.append(msg)
                         included_ids.add(msg.message_id)
 
@@ -91,40 +89,49 @@ class ContextBuilder:
             participant_ids=participants,
         )
 
-    def build_batch(self, targets: list[Message], history: list[Message]) -> BatchModerationContext:
+    def build_batch(
+        self,
+        targets: list[StoredChatMessage],
+        history: list[StoredChatMessage],
+    ) -> BatchModerationContext:
         if not targets:
             raise ValueError("Batch must contain at least one message")
 
         ordered = sorted(targets, key=lambda m: m.message_id)
         earliest_id = ordered[0].message_id
+        by_id = {m.message_id: m for m in history}
+        for t in ordered:
+            by_id[t.message_id] = t
 
-        valid_history: list[Message] = []
+        valid_history: list[StoredChatMessage] = []
         for msg in history:
             if msg.message_id >= earliest_id:
                 continue
-            if _message_text(msg) is None:
+            if not msg.text:
                 continue
             valid_history.append(msg)
         valid_history = valid_history[-self.history_limit :]
         included_ids: set[int] = {m.message_id for m in valid_history}
 
-        extra: list[Message] = []
+        extra: list[StoredChatMessage] = []
+        sorted_history = sorted(history, key=lambda m: m.message_id)
         for target in ordered:
-            if target.reply_to_message:
-                replied = target.reply_to_message
-                if replied.message_id not in included_ids and _message_text(replied):
-                    extra.append(replied)
-                    included_ids.add(replied.message_id)
-                idx = next(
-                    (i for i, m in enumerate(history) if m.message_id == replied.message_id),
-                    -1,
-                )
-                if idx >= 0:
-                    start = max(0, idx - self.reply_context_above)
-                    for msg in history[start:idx]:
-                        if msg.message_id not in included_ids and _message_text(msg):
-                            extra.append(msg)
-                            included_ids.add(msg.message_id)
+            if not target.reply_to_message_id:
+                continue
+            replied = by_id.get(target.reply_to_message_id)
+            if replied and replied.message_id not in included_ids:
+                extra.append(replied)
+                included_ids.add(replied.message_id)
+            idx = next(
+                (i for i, m in enumerate(sorted_history) if m.message_id == target.reply_to_message_id),
+                -1,
+            )
+            if idx >= 0:
+                start = max(0, idx - self.reply_context_above)
+                for msg in sorted_history[start:idx]:
+                    if msg.message_id not in included_ids and msg.text:
+                        extra.append(msg)
+                        included_ids.add(msg.message_id)
 
         background = sorted(extra + valid_history, key=lambda m: m.message_id)
         ctx_messages: list[ContextMessage] = []
@@ -186,22 +193,13 @@ class ContextBuilder:
         return "\n".join(lines)
 
 
-def _message_text(msg: Message) -> str | None:
-      if msg.text:
-          return msg.text
-      if msg.caption:
-          return msg.caption
-      return None
-
-
-def _to_context(msg: Message, is_target: bool = False) -> ContextMessage:
-      user = msg.from_user
-      return ContextMessage(
-          message_id=msg.message_id,
-          user_id=user.id if user else 0,
-          username=user.username if user else None,
-          full_name=user.full_name if user else "Unknown",
-          text=_message_text(msg) or "",
-          reply_to_message_id=msg.reply_to_message.message_id if msg.reply_to_message else None,
-          is_target=is_target,
-      )
+def _to_context(msg: StoredChatMessage, is_target: bool = False) -> ContextMessage:
+    return ContextMessage(
+        message_id=msg.message_id,
+        user_id=msg.user_id,
+        username=msg.username,
+        full_name=msg.full_name,
+        text=msg.text,
+        reply_to_message_id=msg.reply_to_message_id,
+        is_target=is_target,
+    )

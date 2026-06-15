@@ -32,6 +32,7 @@ class Settings:
         self.default_batch_interval: int = int(settings.get("default_batch_interval", 30))
         self.batch_max_messages: int = int(settings.get("batch_max_messages", 50))
         self.punishment_history_days: int = int(settings.get("punishment_history_days", 30))
+        self.chat_history_limit: int = int(settings.get("chat_history_limit", 200))
         self.database_path: str = settings.get("database_path", "data/bot.db")
         self.gemini_models: list[str] = settings.get("gemini_models", [
             "gemini-2.5-pro",

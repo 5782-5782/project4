@@ -10,6 +10,7 @@ from aiogram.types import Message
 
 from bot.config import get_settings
 from bot.db.database import Database
+from bot.services.chat_history import StoredChatMessage, from_telegram
 from bot.services.context import ContextBuilder
 from bot.services.moderation import ModerationService
 from bot.utils.access import can_use_ai_quota, get_chat_owner_for_processing
@@ -46,7 +47,6 @@ class BatchProcessor:
         self.context_builder = context_builder
         self.settings = get_settings()
         self._states: dict[int, ChatBatchState] = defaultdict(ChatBatchState)
-        self._history: dict[int, list[Message]] = defaultdict(list)
         self._lock = asyncio.Lock()
         self._bot: Bot | None = None
         self._scheduler_task: asyncio.Task | None = None
@@ -69,14 +69,17 @@ class BatchProcessor:
             await asyncio.gather(*self._flush_tasks, return_exceptions=True)
             self._flush_tasks.clear()
 
-    def store_history(self, chat_id: int, message: Message) -> None:
-        history = self._history[chat_id]
-        history.append(message)
-        if len(history) > 200:
-            self._history[chat_id] = history[-200:]
+    async def store_history(self, message: Message) -> None:
+        await self.db.save_chat_messages_from_telegram(message)
 
-    def get_history(self, chat_id: int) -> list[Message]:
-        return list(self._history.get(chat_id, []))
+    async def get_history(self, chat_id: int) -> list[StoredChatMessage]:
+        return await self.db.get_chat_messages(chat_id)
+
+    async def _resolve_stored(self, chat_id: int, message: Message) -> StoredChatMessage | None:
+        stored = from_telegram(message)
+        if stored:
+            return stored
+        return await self.db.get_chat_message(chat_id, message.message_id)
 
     async def enqueue(self, bot: Bot, message: Message) -> None:
         self._bot = bot
@@ -103,7 +106,7 @@ class BatchProcessor:
         )
 
         if interval == 0:
-            history = list(self._history.get(chat_id, []))
+            history = await self.get_history(chat_id)
             await self._process_batch(bot, chat_id, [message], history, owner_id)
             return
 
@@ -146,10 +149,11 @@ class BatchProcessor:
             if slot == state.open_slot:
                 return
             msgs = state.messages[:]
-            hist = list(self._history.get(chat_id, []))
             owner_id = state.owner_id
             state.messages.clear()
             state.open_slot = None
+
+        history = await self.get_history(chat_id)
 
         logger.info(
             "Flushing moderation slot chat=%s slot=%s messages=%s",
@@ -165,7 +169,7 @@ class BatchProcessor:
         if not bot:
             return
 
-        task = asyncio.create_task(self._process_batch(bot, chat_id, msgs, hist, owner_id))
+        task = asyncio.create_task(self._process_batch(bot, chat_id, msgs, history, owner_id))
         self._flush_tasks.add(task)
         task.add_done_callback(self._flush_tasks.discard)
 
@@ -174,7 +178,7 @@ class BatchProcessor:
         bot: Bot,
         chat_id: int,
         messages: list[Message],
-        history: list[Message],
+        history: list[StoredChatMessage],
         owner_id: int,
     ) -> None:
         if not messages:
@@ -201,9 +205,27 @@ class BatchProcessor:
                 logger.warning("Quota exhausted for chat=%s: %s", chat_id, reason)
                 break
             try:
-                if len(chunk) == 1:
-                    msg = chunk[0]
-                    ctx = self.context_builder.build(msg, history)
+                pending: list[tuple[Message, StoredChatMessage]] = []
+                for msg in chunk:
+                    if await self.db.was_message_moderated(chat_id, msg.message_id):
+                        logger.info(
+                            "Skip already moderated chat=%s msg=%s",
+                            chat_id,
+                            msg.message_id,
+                        )
+                        continue
+                    stored = await self._resolve_stored(chat_id, msg)
+                    if not stored:
+                        logger.warning("No stored message chat=%s msg=%s", chat_id, msg.message_id)
+                        continue
+                    pending.append((msg, stored))
+
+                if not pending:
+                    continue
+
+                if len(pending) == 1:
+                    msg, stored = pending[0]
+                    ctx = self.context_builder.build(stored, history)
                     decision = await self.moderation.analyze(
                         chat_id,
                         rules,
@@ -216,8 +238,9 @@ class BatchProcessor:
                     )
                     continue
 
-                ctx = self.context_builder.build_batch(chunk, history)
-                target_ids = [m.message_id for m in chunk]
+                stored_chunk = [s for _, s in pending]
+                ctx = self.context_builder.build_batch(stored_chunk, history)
+                target_ids = [s.message_id for s in stored_chunk]
                 decisions = await self.moderation.analyze_batch(
                     chat_id,
                     rules,
@@ -225,8 +248,8 @@ class BatchProcessor:
                     ctx,
                     admin_user_id=owner_id,
                 )
-                msg_by_id = {m.message_id: m for m in chunk}
-                mapped = self.moderation.map_batch_decisions(decisions, chunk)
+                msg_by_id = {m.message_id: m for m, _ in pending}
+                mapped = self.moderation.map_batch_decisions(decisions, [m for m, _ in pending])
                 for msg_id in sorted(msg_by_id):
                     msg = msg_by_id[msg_id]
                     decision = mapped.get(msg_id)
@@ -236,7 +259,10 @@ class BatchProcessor:
                             chat_id,
                             msg_id,
                         )
-                        ctx_single = self.context_builder.build(msg, history)
+                        stored = await self._resolve_stored(chat_id, msg)
+                        if not stored:
+                            continue
+                        ctx_single = self.context_builder.build(stored, history)
                         decision = await self.moderation.analyze(
                             chat_id,
                             rules,
