@@ -1,7 +1,9 @@
-from aiogram.types import CallbackQuery, User
+from aiogram import Bot
+from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwner, User
 
 from bot.config import get_settings
 from bot.db.database import Database
+from bot.utils.access import can_manage_chat, is_owner
 
 
 def format_callback_user(user: User) -> str:
@@ -20,13 +22,29 @@ def format_remaining_seconds(seconds: int) -> str:
     return f"{secs} сек"
 
 
-async def guard_reason_button(callback: CallbackQuery, db: Database) -> bool:
+async def is_reason_spam_exempt(db: Database, bot: Bot, user_id: int, chat_id: int) -> bool:
+    if await is_owner(user_id):
+        return True
+    if chat_id < 0 and await can_manage_chat(db, user_id, chat_id):
+        return True
+    if chat_id >= 0:
+        return False
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+    return isinstance(member, (ChatMemberOwner, ChatMemberAdministrator))
+
+
+async def guard_reason_button(callback: CallbackQuery, db: Database, bot: Bot) -> bool:
     """Anti-spam for the «Причина» button only."""
     if not callback.from_user or not callback.message:
         return True
 
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
+    if await is_reason_spam_exempt(db, bot, user_id, chat_id):
+        return True
     remaining = await db.get_punishment_button_ban_remaining(user_id, chat_id)
     if remaining is not None and remaining > 0:
         await callback.answer(
