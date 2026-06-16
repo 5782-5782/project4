@@ -16,6 +16,7 @@ from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
 from bot.utils.punishment_access import can_manage_punishment
+from bot.utils.chat_roles import get_chat_roles
 from bot.utils.punishment_button_spam import format_callback_user, guard_punishment_button
 from bot.utils.punishment_message import (
     append_status_line,
@@ -102,13 +103,16 @@ async def cmd_modtest(
             await status.edit_text(f"{E['ban']} Не удалось загрузить сообщение для контекста.")
             return
         ctx = ContextBuilder().build(stored, history)
+        chat_roles = await get_chat_roles(message.bot, message.chat.id)
         decision = await moderation.analyze(
             message.chat.id,
             settings.get("rules_text", ""),
             target.message_id,
             ctx,
             admin_user_id=message.from_user.id,
+            chat_roles=chat_roles,
         )
+        decision = moderation.enrich_decision(decision, target, chat_roles)
         preview = format_decision_preview(decision)
         await status.edit_text(
             f"{E['robot']} <b>Тест ИИ-модерации</b> (наказание не применяется)\n\n{preview}"
