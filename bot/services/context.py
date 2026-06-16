@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, field
 
 from bot.services.chat_history import StoredChatMessage
+from bot.utils.chat_roles import format_user_role_tag
 
 logger = logging.getLogger(__name__)
 
@@ -154,39 +155,53 @@ class ContextBuilder:
             participant_ids=participants,
         )
 
-    def format_for_prompt(self, ctx: ModerationContext) -> str:
+    def format_for_prompt(
+        self,
+        ctx: ModerationContext,
+        roles_by_user_id: dict[int, str] | None = None,
+    ) -> str:
+        roles = roles_by_user_id or {}
         lines = ["=== ИСТОРИЯ СООБЩЕНИЙ (от старых к новым) ==="]
         for msg in ctx.messages:
             reply_note = f" [reply_to:{msg.reply_to_message_id}]" if msg.reply_to_message_id else ""
             user = f"@{msg.username}" if msg.username else msg.full_name
+            role_tag = format_user_role_tag(msg.user_id, roles)
             lines.append(
-                f"[id:{msg.message_id}] [user_id:{msg.user_id}] [{user}]{reply_note}: {msg.text}"
+                f"[id:{msg.message_id}] [user_id:{msg.user_id}] [{user}]{role_tag}{reply_note}: {msg.text}"
             )
         lines.append("")
         lines.append("=== ОБРАБАТЫВАЕМОЕ СООБЩЕНИЕ ===")
         t = ctx.target_message
         user = f"@{t.username}" if t.username else t.full_name
+        role_tag = format_user_role_tag(t.user_id, roles)
         reply_note = f" [reply_to:{t.reply_to_message_id}]" if t.reply_to_message_id else ""
-        lines.append(f"[id:{t.message_id}] [user_id:{t.user_id}] [{user}]{reply_note}: {t.text}")
+        lines.append(f"[id:{t.message_id}] [user_id:{t.user_id}] [{user}]{role_tag}{reply_note}: {t.text}")
         lines.append("")
         lines.append(f"Участники контекста (user_id): {', '.join(str(x) for x in sorted(ctx.participant_ids))}")
         return "\n".join(lines)
 
-    def format_batch_for_prompt(self, ctx: BatchModerationContext) -> str:
+    def format_batch_for_prompt(
+        self,
+        ctx: BatchModerationContext,
+        roles_by_user_id: dict[int, str] | None = None,
+    ) -> str:
+        roles = roles_by_user_id or {}
         lines = ["=== ИСТОРИЯ ДО ПАЧКИ (от старых к новым) ==="]
         for msg in ctx.messages:
             reply_note = f" [reply_to:{msg.reply_to_message_id}]" if msg.reply_to_message_id else ""
             user = f"@{msg.username}" if msg.username else msg.full_name
+            role_tag = format_user_role_tag(msg.user_id, roles)
             lines.append(
-                f"[id:{msg.message_id}] [user_id:{msg.user_id}] [{user}]{reply_note}: {msg.text}"
+                f"[id:{msg.message_id}] [user_id:{msg.user_id}] [{user}]{role_tag}{reply_note}: {msg.text}"
             )
         lines.append("")
         lines.append("=== СООБЩЕНИЯ ДЛЯ АНАЛИЗА (батч) ===")
         for msg in ctx.target_messages:
             user = f"@{msg.username}" if msg.username else msg.full_name
+            role_tag = format_user_role_tag(msg.user_id, roles)
             reply_note = f" [reply_to:{msg.reply_to_message_id}]" if msg.reply_to_message_id else ""
             lines.append(
-                f"[id:{msg.message_id}] [user_id:{msg.user_id}] [{user}]{reply_note}: {msg.text}"
+                f"[id:{msg.message_id}] [user_id:{msg.user_id}] [{user}]{role_tag}{reply_note}: {msg.text}"
             )
         lines.append("")
         lines.append(f"Участники контекста (user_id): {', '.join(str(x) for x in sorted(ctx.participant_ids))}")

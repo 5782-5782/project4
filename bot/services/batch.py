@@ -14,6 +14,7 @@ from bot.services.chat_history import StoredChatMessage, from_telegram
 from bot.services.context import ContextBuilder
 from bot.services.moderation import ModerationService
 from bot.utils.access import can_use_ai_quota, get_chat_owner_for_processing
+from bot.utils.chat_roles import get_chat_roles
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,7 @@ class BatchProcessor:
                 logger.warning("Quota exhausted for chat=%s: %s", chat_id, reason)
                 break
             try:
+                chat_roles = await get_chat_roles(bot, chat_id)
                 pending: list[tuple[Message, StoredChatMessage]] = []
                 for msg in chunk:
                     if await self.db.was_message_moderated(chat_id, msg.message_id):
@@ -232,7 +234,9 @@ class BatchProcessor:
                         msg.message_id,
                         ctx,
                         admin_user_id=owner_id,
+                        chat_roles=chat_roles,
                     )
+                    decision = self.moderation.enrich_decision(decision, msg, chat_roles)
                     await self.moderation.apply_decision(
                         bot, chat_id, decision, msg.message_id, target_message=msg
                     )
@@ -247,6 +251,7 @@ class BatchProcessor:
                     target_ids,
                     ctx,
                     admin_user_id=owner_id,
+                    chat_roles=chat_roles,
                 )
                 msg_by_id = {m.message_id: m for m, _ in pending}
                 mapped = self.moderation.map_batch_decisions(decisions, [m for m, _ in pending])
@@ -269,8 +274,9 @@ class BatchProcessor:
                             msg_id,
                             ctx_single,
                             admin_user_id=owner_id,
+                            chat_roles=chat_roles,
                         )
-                    decision = self.moderation.enrich_decision(decision, msg)
+                    decision = self.moderation.enrich_decision(decision, msg, chat_roles)
                     await self.moderation.apply_decision(
                         bot,
                         chat_id,
