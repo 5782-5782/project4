@@ -199,7 +199,7 @@ async def _show_chat_detail(message, db: Database, user_id: int, chat_id: int) -
         f"📜 Правила: <b>{rules_len}</b> символов\n\n"
         f"📈 Сегодня: 🕊{stats.get('pardon', 0)} | 🚫{stats.get('punish', 0)}"
     )
-    await safe_edit_message(callback.message, text, chat_detail_keyboard(chat_id, mod_on))
+    await safe_edit_message(message, text, chat_detail_keyboard(chat_id, mod_on))
 
 
 @router.callback_query(F.data.startswith("chat_rules:"))
