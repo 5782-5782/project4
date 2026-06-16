@@ -272,7 +272,7 @@ async def cb_punish_reason(callback: CallbackQuery, db: Database, bot: Bot) -> N
     if not callback.from_user or not callback.message:
         await callback.answer("Ошибка", show_alert=True)
         return
-    if not await guard_reason_button(callback, db):
+    if not await guard_reason_button(callback, db, bot):
         return
 
     punishment_id = int(callback.data.split(":")[1])
@@ -339,7 +339,7 @@ async def cb_punish_done_reason(callback: CallbackQuery, bot: Bot, db: Database)
     if not callback.from_user or not callback.message:
         await callback.answer("Ошибка", show_alert=True)
         return
-    if not await guard_reason_button(callback, db):
+    if not await guard_reason_button(callback, db, bot):
         return
 
     text = callback.message.text or callback.message.caption or ""
