@@ -20,8 +20,8 @@ def format_remaining_seconds(seconds: int) -> str:
     return f"{secs} сек"
 
 
-async def guard_punishment_button(callback: CallbackQuery, db: Database) -> bool:
-    """Return True if the click may proceed. Otherwise answer with spam alert."""
+async def guard_reason_button(callback: CallbackQuery, db: Database) -> bool:
+    """Anti-spam for the «Причина» button only."""
     if not callback.from_user or not callback.message:
         return True
 
