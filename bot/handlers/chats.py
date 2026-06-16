@@ -1,4 +1,3 @@
-import html
 import json
 import logging
 
@@ -21,6 +20,7 @@ from bot.services.gemini import GeminiService
 from bot.states.admin import AdminStates
 from bot.ui.emoji import E
 from bot.utils.access import can_access_dm, can_manage_chat, is_owner
+from bot.utils.rules_message import build_rules_view_messages
 from bot.utils.telegram_edit import safe_edit_message
 
 logger = logging.getLogger(__name__)
@@ -215,14 +215,10 @@ async def cb_chat_rules(callback: CallbackQuery, state: FSMContext, db: Database
     await state.update_data(chat_id=chat_id)
     await db.set_pending_rules_input(uid, chat_id)
     settings = await db.get_chat_settings(chat_id)
-    preview = html.escape((settings.get("rules_text") or "")[:500])
-    await safe_edit_message(
-        callback.message,
-        f"{E['rules']} <b>Правила чата</b>\n\n"
-        f"Отправьте новый текст правил следующим сообщением или .txt файлом.\n"
-        f"Отмена: /cancel\n\n"
-        f"<b>Текущие:</b>\n<pre>{preview or '(пусто)'}</pre>",
-    )
+    messages = build_rules_view_messages(settings.get("rules_text", ""))
+    await safe_edit_message(callback.message, messages[0])
+    for extra in messages[1:]:
+        await callback.message.answer(extra)
     await callback.answer()
 
 
