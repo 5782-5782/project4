@@ -43,7 +43,15 @@ async def main() -> None:
     gemini.start()
 
     moderation_svc = ModerationService(db, gemini)
-    batch_processor = BatchProcessor(db, moderation_svc, ContextBuilder())
+    settings = get_settings()
+    batch_processor = BatchProcessor(
+        db,
+        moderation_svc,
+        ContextBuilder(
+            history_limit=settings.chat_context_limit,
+            reply_context_above=settings.reply_context_above,
+        ),
+    )
 
     bot = Bot(
         token=settings.bot_token,

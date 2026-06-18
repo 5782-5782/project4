@@ -38,9 +38,10 @@ class Settings:
         self.chat_context_limit: int = int(
             settings.get(
                 "chat_context_limit",
-                settings.get("chat_history_limit", 500),
+                settings.get("chat_history_limit", 100),
             )
         )
+        self.reply_context_above: int = int(settings.get("reply_context_above", 10))
         # Обратная совместимость: старое имя настройки
         self.chat_history_limit: int = self.chat_context_limit
         self.database_path: str = settings.get("database_path", "data/bot.db")

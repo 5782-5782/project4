@@ -14,7 +14,6 @@ from bot.keyboards.punishment import (
 )
 from bot.services.batch import BatchProcessor
 from bot.services.chat_history import from_telegram
-from bot.services.context import ContextBuilder
 from bot.services.gemini import GeminiAuthError, RateLimitExhausted
 from bot.services.moderation import ModerationService, format_decision_preview
 from bot.ui.emoji import E
@@ -105,7 +104,7 @@ async def cmd_modtest(
             await status.edit_text(f"{E['ban']} Не удалось загрузить сообщение для контекста.")
             return
         history = await batch_processor.get_history(message.chat.id, [stored])
-        ctx = ContextBuilder().build(stored, history)
+        ctx = batch_processor.context_builder.build(stored, history)
         chat_roles = await get_chat_roles(message.bot, message.chat.id)
         decision = await moderation.analyze(
             message.bot,
