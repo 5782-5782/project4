@@ -24,6 +24,7 @@ class Punishment:
     message_id: int | None
     can_unpunish_ids: str
     active: bool
+    hidden_from_history: bool
     created_at: str
     expires_at: str | None
 
@@ -187,6 +188,13 @@ class Database:
                 ON chat_messages(chat_id, message_id)
             """
         )
+        try:
+            await db.execute(
+                "ALTER TABLE punishments ADD COLUMN hidden_from_history INTEGER NOT NULL DEFAULT 0"
+            )
+            await db.commit()
+        except Exception:
+            pass
         await db.commit()
 
     async def register_chat(self, chat_id: int, title: str, owner_admin_id: int) -> None:
@@ -452,6 +460,15 @@ class Database:
             await db.commit()
             return (cur.rowcount or 0) > 0
 
+    async def hide_punishment_from_history(self, punishment_id: int) -> bool:
+        async with self.connection() as db:
+            cur = await db.execute(
+                "UPDATE punishments SET hidden_from_history = 1 WHERE id = ?",
+                (punishment_id,),
+            )
+            await db.commit()
+            return (cur.rowcount or 0) > 0
+
     async def get_chat_punishment_history(
         self,
         chat_id: int,
@@ -466,7 +483,7 @@ class Database:
                 await db.execute(
                     """
                     SELECT * FROM punishments
-                    WHERE chat_id = ? AND created_at >= ?
+                    WHERE chat_id = ? AND created_at >= ? AND hidden_from_history = 0
                     ORDER BY created_at DESC
                     LIMIT ?
                     """,
@@ -507,7 +524,7 @@ class Database:
                     await db.execute(
                         """
                         SELECT * FROM punishments
-                        WHERE chat_id = ? AND created_at >= ?
+                        WHERE chat_id = ? AND created_at >= ? AND hidden_from_history = 0
                         ORDER BY created_at DESC
                         LIMIT ?
                         """,
@@ -519,7 +536,7 @@ class Database:
                     await db.execute(
                         """
                         SELECT * FROM punishments
-                        WHERE created_at >= ?
+                        WHERE created_at >= ? AND hidden_from_history = 0
                         ORDER BY created_at DESC
                         LIMIT ?
                         """,
@@ -543,6 +560,7 @@ class Database:
         query = f"""
             SELECT * FROM punishments
             WHERE chat_id = ? AND user_id IN ({placeholders}) AND created_at >= ?
+              AND hidden_from_history = 0
             ORDER BY created_at DESC
         """
         async with self.connection() as db:
@@ -840,6 +858,7 @@ def _row_to_punishment(row: aiosqlite.Row) -> Punishment:
         message_id=row["message_id"],
         can_unpunish_ids=row["can_unpunish_ids"],
         active=bool(row["active"]),
+        hidden_from_history=bool(row["hidden_from_history"]),
         created_at=row["created_at"],
         expires_at=row["expires_at"],
     )

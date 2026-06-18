@@ -53,6 +53,26 @@ def unpunish_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def unpunish_only_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🕊 Снять наказание",
+                    callback_data=f"unpunish:{punishment_id}",
+                ),
+            ],
+            [_reason_button(punishment_id)],
+        ]
+    )
+
+
+def reason_only_keyboard(punishment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[_reason_button(punishment_id)]]
+    )
+
+
 def punishments_history_keyboard(punishments: list, back_data: str = "admin:back") -> InlineKeyboardMarkup:
     rows = []
     for p in punishments[:12]:

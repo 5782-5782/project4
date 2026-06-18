@@ -7,7 +7,11 @@ from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, ChatMemberAdministrator, ChatMemberOwner, Message
 
 from bot.db.database import Database
-from bot.keyboards.punishment import history_only_keyboard, punishment_done_keyboard
+from bot.keyboards.punishment import (
+    history_only_keyboard,
+    reason_only_keyboard,
+    unpunish_only_keyboard,
+)
 from bot.services.batch import BatchProcessor
 from bot.services.chat_history import from_telegram
 from bot.services.context import ContextBuilder
@@ -23,7 +27,6 @@ from bot.utils.punishment_message import (
     build_punishments_list_view,
     deliver_punishment_reason,
     extract_reason_from_message,
-    format_reason_status_line,
     get_punishments_list_back,
     is_private_punishments_list,
 )
@@ -310,11 +313,11 @@ async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None
         )
         return
 
-    if punishment.active:
-        await _lift_mute(bot, punishment.chat_id, punishment.user_id, punishment.punishment_type)
+    if punishment.hidden_from_history:
+        await callback.answer("Уже удалено из истории", show_alert=True)
+        return
 
-    explanation = punishment.explanation
-    await db.delete_punishment(punishment_id)
+    await db.hide_punishment_from_history(punishment_id)
 
     if is_private_punishments_list(callback.message):
         back_data = get_punishments_list_back(callback.message.reply_markup)
@@ -324,13 +327,10 @@ async def cb_punish_del(callback: CallbackQuery, db: Database, bot: Bot) -> None
         await callback.answer("Удалено из истории")
         return
 
-    original = callback.message.text or callback.message.caption or ""
-    status = format_reason_status_line(explanation)
-    await edit_message_status_and_keyboard(
-        callback.message,
-        append_status_line(original, status),
-        punishment_done_keyboard(),
-    )
+    if punishment.active:
+        await edit_message_markup_safe(callback.message, unpunish_only_keyboard(punishment_id))
+    else:
+        await edit_message_markup_safe(callback.message, reason_only_keyboard(punishment_id))
     await callback.answer("Удалено из истории")
 
 
