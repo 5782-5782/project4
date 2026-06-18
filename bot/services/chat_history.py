@@ -51,3 +51,37 @@ def from_row(row) -> StoredChatMessage:
         text=row["text"],
         reply_to_message_id=row["reply_to_message_id"],
     )
+
+
+async def enrich_moderation_history(
+    db,
+    chat_id: int,
+    history: list[StoredChatMessage],
+    targets: list[StoredChatMessage],
+    *,
+    reply_context_above: int = 10,
+) -> list[StoredChatMessage]:
+    """Add reply targets and nearby thread messages from DB even if outside recent window."""
+    by_id = {m.message_id: m for m in history}
+    extras: list[StoredChatMessage] = []
+
+    for target in targets:
+        reply_id = target.reply_to_message_id
+        if not reply_id or reply_id in by_id:
+            continue
+
+        replied = await db.get_chat_message(chat_id, reply_id)
+        if not replied:
+            continue
+        extras.append(replied)
+        by_id[replied.message_id] = replied
+
+        older = await db.get_messages_before(chat_id, reply_id, reply_context_above)
+        for msg in older:
+            if msg.message_id not in by_id and msg.text:
+                extras.append(msg)
+                by_id[msg.message_id] = msg
+
+    if not extras:
+        return history
+    return sorted(history + extras, key=lambda m: m.message_id)

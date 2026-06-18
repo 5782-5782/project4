@@ -10,7 +10,7 @@ from aiogram.types import Message
 
 from bot.config import get_settings
 from bot.db.database import Database
-from bot.services.chat_history import StoredChatMessage, from_telegram
+from bot.services.chat_history import StoredChatMessage, enrich_moderation_history, from_telegram
 from bot.services.context import ContextBuilder
 from bot.services.moderation import ModerationService
 from bot.utils.access import can_use_ai_quota, get_chat_owner_for_processing
@@ -73,8 +73,21 @@ class BatchProcessor:
     async def store_history(self, message: Message) -> None:
         await self.db.save_chat_messages_from_telegram(message)
 
-    async def get_history(self, chat_id: int) -> list[StoredChatMessage]:
-        return await self.db.get_chat_messages(chat_id)
+    async def get_history(
+        self,
+        chat_id: int,
+        targets: list[StoredChatMessage] | None = None,
+    ) -> list[StoredChatMessage]:
+        history = await self.db.get_chat_messages(chat_id)
+        if targets:
+            history = await enrich_moderation_history(
+                self.db,
+                chat_id,
+                history,
+                targets,
+                reply_context_above=self.context_builder.reply_context_above,
+            )
+        return history
 
     async def _resolve_stored(self, chat_id: int, message: Message) -> StoredChatMessage | None:
         stored = from_telegram(message)
@@ -107,8 +120,7 @@ class BatchProcessor:
         )
 
         if interval == 0:
-            history = await self.get_history(chat_id)
-            await self._process_batch(bot, chat_id, [message], history, owner_id)
+            await self._process_batch(bot, chat_id, [message], owner_id)
             return
 
         now = time.time()
@@ -154,8 +166,6 @@ class BatchProcessor:
             state.messages.clear()
             state.open_slot = None
 
-        history = await self.get_history(chat_id)
-
         logger.info(
             "Flushing moderation slot chat=%s slot=%s messages=%s",
             chat_id,
@@ -170,7 +180,7 @@ class BatchProcessor:
         if not bot:
             return
 
-        task = asyncio.create_task(self._process_batch(bot, chat_id, msgs, history, owner_id))
+        task = asyncio.create_task(self._process_batch(bot, chat_id, msgs, owner_id))
         self._flush_tasks.add(task)
         task.add_done_callback(self._flush_tasks.discard)
 
@@ -179,7 +189,6 @@ class BatchProcessor:
         bot: Bot,
         chat_id: int,
         messages: list[Message],
-        history: list[StoredChatMessage],
         owner_id: int,
     ) -> None:
         if not messages:
@@ -190,6 +199,12 @@ class BatchProcessor:
         max_batch = self.settings.batch_max_messages
 
         ordered = sorted(messages, key=lambda m: m.message_id)
+        resolved_targets: list[StoredChatMessage] = []
+        for msg in ordered:
+            stored = await self._resolve_stored(chat_id, msg)
+            if stored:
+                resolved_targets.append(stored)
+        history = await self.get_history(chat_id, resolved_targets)
         chunks = [ordered[i : i + max_batch] for i in range(0, len(ordered), max_batch)]
 
         logger.info(

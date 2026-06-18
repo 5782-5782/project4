@@ -32,7 +32,17 @@ class Settings:
         self.default_batch_interval: int = int(settings.get("default_batch_interval", 30))
         self.batch_max_messages: int = int(settings.get("batch_max_messages", 50))
         self.punishment_history_days: int = int(settings.get("punishment_history_days", 30))
-        self.chat_history_limit: int = int(settings.get("chat_history_limit", 200))
+        # 0 = хранить все сообщения в БД без удаления
+        self.chat_messages_retention: int = int(settings.get("chat_messages_retention", 0))
+        # Сколько последних сообщений подгружать для контекста ИИ (не влияет на хранение)
+        self.chat_context_limit: int = int(
+            settings.get(
+                "chat_context_limit",
+                settings.get("chat_history_limit", 500),
+            )
+        )
+        # Обратная совместимость: старое имя настройки
+        self.chat_history_limit: int = self.chat_context_limit
         self.database_path: str = settings.get("database_path", "data/bot.db")
         self.gemini_models: list[str] = settings.get("gemini_models", [
             "gemini-2.5-pro",

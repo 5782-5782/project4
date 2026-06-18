@@ -98,13 +98,13 @@ async def cmd_modtest(
     try:
         await batch_processor.store_history(message)
         await batch_processor.store_history(target)
-        history = await batch_processor.get_history(message.chat.id)
         stored = from_telegram(target) or await db.get_chat_message(
             message.chat.id, target.message_id
         )
         if not stored:
             await status.edit_text(f"{E['ban']} Не удалось загрузить сообщение для контекста.")
             return
+        history = await batch_processor.get_history(message.chat.id, [stored])
         ctx = ContextBuilder().build(stored, history)
         chat_roles = await get_chat_roles(message.bot, message.chat.id)
         decision = await moderation.analyze(

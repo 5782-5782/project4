@@ -742,7 +742,7 @@ class Database:
 
     async def save_chat_message(self, msg: StoredChatMessage) -> None:
         settings = get_settings()
-        keep = settings.chat_history_limit
+        retention = settings.chat_messages_retention
         async with self.connection() as db:
             await db.execute(
                 """
@@ -752,6 +752,8 @@ class Database:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id, message_id) DO UPDATE SET
                     text = excluded.text,
+                    username = excluded.username,
+                    full_name = excluded.full_name,
                     reply_to_message_id = excluded.reply_to_message_id
                 """,
                 (
@@ -765,18 +767,19 @@ class Database:
                     _now_iso(),
                 ),
             )
-            await db.execute(
-                """
-                DELETE FROM chat_messages
-                WHERE chat_id = ? AND message_id < (
-                    SELECT message_id FROM chat_messages
-                    WHERE chat_id = ?
-                    ORDER BY message_id DESC
-                    LIMIT 1 OFFSET ?
+            if retention > 0:
+                await db.execute(
+                    """
+                    DELETE FROM chat_messages
+                    WHERE chat_id = ? AND message_id < (
+                        SELECT message_id FROM chat_messages
+                        WHERE chat_id = ?
+                        ORDER BY message_id DESC
+                        LIMIT 1 OFFSET ?
+                    )
+                    """,
+                    (msg.chat_id, msg.chat_id, retention),
                 )
-                """,
-                (msg.chat_id, msg.chat_id, keep),
-            )
             await db.commit()
 
     async def upsert_chat_participant(
@@ -925,17 +928,55 @@ class Database:
         from bot.services.chat_history import StoredChatMessage, from_row
 
         settings = get_settings()
-        lim = limit or settings.chat_history_limit
+        lim = settings.chat_context_limit if limit is None else limit
+        async with self.connection() as db:
+            if lim > 0:
+                rows = await (
+                    await db.execute(
+                        """
+                        SELECT * FROM chat_messages
+                        WHERE chat_id = ?
+                        ORDER BY message_id DESC
+                        LIMIT ?
+                        """,
+                        (chat_id, lim),
+                    )
+                ).fetchall()
+            else:
+                rows = await (
+                    await db.execute(
+                        """
+                        SELECT * FROM chat_messages
+                        WHERE chat_id = ?
+                        ORDER BY message_id DESC
+                        """,
+                        (chat_id,),
+                    )
+                ).fetchall()
+        items = [from_row(r) for r in rows]
+        items.reverse()
+        return items
+
+    async def get_messages_before(
+        self,
+        chat_id: int,
+        before_message_id: int,
+        limit: int,
+    ) -> list:
+        from bot.services.chat_history import from_row
+
+        if limit <= 0:
+            return []
         async with self.connection() as db:
             rows = await (
                 await db.execute(
                     """
                     SELECT * FROM chat_messages
-                    WHERE chat_id = ?
+                    WHERE chat_id = ? AND message_id < ?
                     ORDER BY message_id DESC
                     LIMIT ?
                     """,
-                    (chat_id, lim),
+                    (chat_id, before_message_id, limit),
                 )
             ).fetchall()
         items = [from_row(r) for r in rows]
