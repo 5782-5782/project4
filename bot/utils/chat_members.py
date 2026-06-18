@@ -248,6 +248,36 @@ async def _resolve_username(
     return f"{mention} — не найден в реестре бота (возможно, человек не писал в чат)"
 
 
+async def lookup_participant_by_username(
+    bot: Bot,
+    db: Database,
+    chat_id: int,
+    username: str,
+) -> ChatParticipant | None:
+    uname = username.lstrip("@").lower()
+    if not uname:
+        return None
+
+    stored = await db.find_chat_participant_by_username(chat_id, uname)
+    if not stored:
+        for participant in await db.get_chat_participants(chat_id, in_chat_only=False):
+            if participant.username and participant.username.lower() == uname:
+                stored = participant
+                break
+    if not stored:
+        return None
+
+    try:
+        member = await bot.get_chat_member(chat_id, stored.user_id)
+        user = member.user
+        if user.is_bot:
+            return None
+        await upsert_participant_from_user(db, chat_id, user)
+        return await db.get_chat_participant(chat_id, user.id)
+    except Exception:
+        return stored if stored.in_chat else None
+
+
 async def resolve_user_lookups(
     bot: Bot,
     db: Database,

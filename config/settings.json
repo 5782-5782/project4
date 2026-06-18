@@ -5,7 +5,7 @@
   "default_batch_interval": 30,
   "batch_max_messages": 50,
   "punishment_history_days": 30,
-  "chat_messages_retention": 0,
+  "chat_messages_retention": 10000,
   "chat_context_limit": 500,
   "chat_members_full_list_threshold": 100,
   "database_path": "data/bot.db",

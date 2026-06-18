@@ -33,7 +33,7 @@ class Settings:
         self.batch_max_messages: int = int(settings.get("batch_max_messages", 50))
         self.punishment_history_days: int = int(settings.get("punishment_history_days", 30))
         # 0 = хранить все сообщения в БД без удаления
-        self.chat_messages_retention: int = int(settings.get("chat_messages_retention", 0))
+        self.chat_messages_retention: int = int(settings.get("chat_messages_retention", 10000))
         # Сколько последних сообщений подгружать для контекста ИИ (не влияет на хранение)
         self.chat_context_limit: int = int(
             settings.get(

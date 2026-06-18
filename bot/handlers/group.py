@@ -116,7 +116,9 @@ async def cmd_modtest(
             admin_user_id=message.from_user.id,
             chat_roles=chat_roles,
         )
-        decision = moderation.enrich_decision(decision, target, chat_roles)
+        decision = await moderation.finalize_decision(
+            message.bot, message.chat.id, decision, target, chat_roles
+        )
         preview = format_decision_preview(decision)
         await status.edit_text(
             f"{E['robot']} <b>Тест ИИ-модерации</b> (наказание не применяется)\n\n{preview}"

@@ -252,7 +252,9 @@ class BatchProcessor:
                         admin_user_id=owner_id,
                         chat_roles=chat_roles,
                     )
-                    decision = self.moderation.enrich_decision(decision, msg, chat_roles)
+                    decision = await self.moderation.finalize_decision(
+                        bot, chat_id, decision, msg, chat_roles
+                    )
                     await self.moderation.apply_decision(
                         bot, chat_id, decision, msg.message_id, target_message=msg
                     )
@@ -294,7 +296,9 @@ class BatchProcessor:
                             admin_user_id=owner_id,
                             chat_roles=chat_roles,
                         )
-                    decision = self.moderation.enrich_decision(decision, msg, chat_roles)
+                    decision = await self.moderation.finalize_decision(
+                        bot, chat_id, decision, msg, chat_roles
+                    )
                     await self.moderation.apply_decision(
                         bot,
                         chat_id,
