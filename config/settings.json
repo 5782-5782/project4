@@ -6,6 +6,7 @@
   "batch_max_messages": 50,
   "punishment_history_days": 30,
   "chat_history_limit": 200,
+  "chat_members_full_list_threshold": 100,
   "database_path": "data/bot.db",
   "spam_ban_days": 7,
   "spam_threshold": 5,

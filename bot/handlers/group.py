@@ -108,6 +108,7 @@ async def cmd_modtest(
         ctx = ContextBuilder().build(stored, history)
         chat_roles = await get_chat_roles(message.bot, message.chat.id)
         decision = await moderation.analyze(
+            message.bot,
             message.chat.id,
             settings.get("rules_text", ""),
             target.message_id,

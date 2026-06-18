@@ -12,6 +12,16 @@ from bot.services.chat_history import StoredChatMessage
 
 
 @dataclass
+class ChatParticipant:
+    chat_id: int
+    user_id: int
+    username: str | None
+    full_name: str
+    in_chat: bool
+    updated_at: str
+
+
+@dataclass
 class Punishment:
     id: int
     chat_id: int
@@ -195,6 +205,25 @@ class Database:
             await db.commit()
         except Exception:
             pass
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_participants (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                full_name TEXT NOT NULL DEFAULT '',
+                in_chat INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (chat_id, user_id)
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_chat_participants_chat
+                ON chat_participants(chat_id, in_chat)
+            """
+        )
         await db.commit()
 
     async def register_chat(self, chat_id: int, title: str, owner_admin_id: int) -> None:
@@ -750,6 +779,136 @@ class Database:
             )
             await db.commit()
 
+    async def upsert_chat_participant(
+        self,
+        chat_id: int,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        *,
+        in_chat: bool = True,
+    ) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                INSERT INTO chat_participants (
+                    chat_id, user_id, username, full_name, in_chat, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                    username = excluded.username,
+                    full_name = excluded.full_name,
+                    in_chat = excluded.in_chat,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, user_id, username, full_name, 1 if in_chat else 0, _now_iso()),
+            )
+            await db.commit()
+
+    async def mark_chat_participant_left(self, chat_id: int, user_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                """
+                UPDATE chat_participants
+                SET in_chat = 0, updated_at = ?
+                WHERE chat_id = ? AND user_id = ?
+                """,
+                (_now_iso(), chat_id, user_id),
+            )
+            await db.commit()
+
+    async def get_chat_participants(
+        self,
+        chat_id: int,
+        *,
+        in_chat_only: bool = True,
+    ) -> list[ChatParticipant]:
+        async with self.connection() as db:
+            query = "SELECT * FROM chat_participants WHERE chat_id = ?"
+            params: list[Any] = [chat_id]
+            if in_chat_only:
+                query += " AND in_chat = 1"
+            query += " ORDER BY full_name COLLATE NOCASE, user_id"
+            rows = await (await db.execute(query, params)).fetchall()
+            return [_row_to_chat_participant(r) for r in rows]
+
+    async def count_chat_participants(self, chat_id: int, *, in_chat_only: bool = True) -> int:
+        async with self.connection() as db:
+            query = "SELECT COUNT(*) as cnt FROM chat_participants WHERE chat_id = ?"
+            params: list[Any] = [chat_id]
+            if in_chat_only:
+                query += " AND in_chat = 1"
+            row = await (await db.execute(query, params)).fetchone()
+            return int(row["cnt"]) if row else 0
+
+    async def find_chat_participant_by_username(
+        self,
+        chat_id: int,
+        username: str,
+    ) -> ChatParticipant | None:
+        uname = username.lstrip("@").lower()
+        if not uname:
+            return None
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    """
+                    SELECT * FROM chat_participants
+                    WHERE chat_id = ? AND LOWER(username) = ?
+                    ORDER BY in_chat DESC, updated_at DESC
+                    LIMIT 1
+                    """,
+                    (chat_id, uname),
+                )
+            ).fetchone()
+            return _row_to_chat_participant(row) if row else None
+
+    async def get_chat_participant(
+        self,
+        chat_id: int,
+        user_id: int,
+    ) -> ChatParticipant | None:
+        async with self.connection() as db:
+            row = await (
+                await db.execute(
+                    "SELECT * FROM chat_participants WHERE chat_id = ? AND user_id = ?",
+                    (chat_id, user_id),
+                )
+            ).fetchone()
+            return _row_to_chat_participant(row) if row else None
+
+    async def seed_participants_from_chat_messages(self, chat_id: int) -> int:
+        async with self.connection() as db:
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT user_id, username, full_name, MAX(created_at) as last_seen
+                    FROM chat_messages
+                    WHERE chat_id = ?
+                    GROUP BY user_id
+                    """,
+                    (chat_id,),
+                )
+            ).fetchall()
+            now = _now_iso()
+            for row in rows:
+                await db.execute(
+                    """
+                    INSERT INTO chat_participants (
+                        chat_id, user_id, username, full_name, in_chat, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                        username = COALESCE(excluded.username, chat_participants.username),
+                        full_name = CASE
+                            WHEN excluded.full_name != '' THEN excluded.full_name
+                            ELSE chat_participants.full_name
+                        END,
+                        updated_at = excluded.updated_at
+                    """,
+                    (chat_id, row["user_id"], row["username"], row["full_name"] or "", now),
+                )
+            await db.commit()
+            return len(rows)
+
     async def save_chat_messages_from_telegram(self, message) -> None:
         from bot.services.chat_history import from_telegram, message_text
 
@@ -843,6 +1002,17 @@ class Database:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _row_to_chat_participant(row: aiosqlite.Row) -> ChatParticipant:
+    return ChatParticipant(
+        chat_id=row["chat_id"],
+        user_id=row["user_id"],
+        username=row["username"],
+        full_name=row["full_name"],
+        in_chat=bool(row["in_chat"]),
+        updated_at=row["updated_at"],
+    )
 
 
 def _row_to_punishment(row: aiosqlite.Row) -> Punishment:

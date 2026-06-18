@@ -55,6 +55,9 @@ class Settings:
         )
         self.log_clean_checks: bool = bool(settings.get("log_clean_checks", False))
         self.limits_refresh_minutes: int = int(settings.get("limits_refresh_minutes", 30))
+        self.chat_members_full_list_threshold: int = int(
+            settings.get("chat_members_full_list_threshold", 100)
+        )
 
         self.proxy: dict[str, Any] = secrets.get("proxy", {})
 

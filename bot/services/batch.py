@@ -229,6 +229,7 @@ class BatchProcessor:
                     msg, stored = pending[0]
                     ctx = self.context_builder.build(stored, history)
                     decision = await self.moderation.analyze(
+                        bot,
                         chat_id,
                         rules,
                         msg.message_id,
@@ -246,6 +247,7 @@ class BatchProcessor:
                 ctx = self.context_builder.build_batch(stored_chunk, history)
                 target_ids = [s.message_id for s in stored_chunk]
                 decisions = await self.moderation.analyze_batch(
+                    bot,
                     chat_id,
                     rules,
                     target_ids,
@@ -269,6 +271,7 @@ class BatchProcessor:
                             continue
                         ctx_single = self.context_builder.build(stored, history)
                         decision = await self.moderation.analyze(
+                            bot,
                             chat_id,
                             rules,
                             msg_id,
