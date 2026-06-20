@@ -324,7 +324,7 @@ LOOKUP_FOLLOWUP_SINGLE = """
 ДАННЫЕ ПО ЗАПРОСУ УЧАСТНИКОВ:
 {lookup_results}
 
-Теперь вынеси ФИНАЛЬНОЕ решение по модерации в обычном формате JSON (action: none | pardon | punish).
+Теперь вынеси ФИНАЛЬНОЕ решение по модерации в обычном формате JSON (action: none | warning | punish).
 Не используй action="lookup_users" повторно — работай с имеющимися данными.
 """
 

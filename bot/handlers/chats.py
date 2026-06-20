@@ -61,12 +61,12 @@ async def _admin_panel_text(db: Database, gemini: GeminiService, user_id: int) -
     owner = await is_owner(user_id)
     stats = await db.get_moderation_stats(days=1)
     punish_cnt = stats.get("punish", 0)
-    pardon_cnt = stats.get("pardon", 0)
+    warning_cnt = stats.get("warning", 0) + stats.get("pardon", 0)
     lines = [
         f"{E['crown']} <b>Панель управления</b>",
         "",
         f"📈 <b>Сегодня:</b>",
-        f"  ⚠️ Предупреждений: <b>{pardon_cnt}</b>",
+        f"  ⚠️ Предупреждений: <b>{warning_cnt}</b>",
         f"  🚫 Наказан: <b>{punish_cnt}</b>",
     ]
     if owner:
@@ -197,7 +197,7 @@ async def _show_chat_detail(message, db: Database, user_id: int, chat_id: int) -
         f"🛡 Модерация: {'🟢 вкл' if mod_on else '🔴 выкл'}\n"
         f"⏱ Интервал: <b>{settings['batch_interval']}</b>с\n"
         f"📜 Правила: <b>{rules_len}</b> символов\n\n"
-        f"📈 Сегодня: ⚠️{stats.get('pardon', 0)} | 🚫{stats.get('punish', 0)}"
+        f"📈 Сегодня: ⚠️{stats.get('warning', 0) + stats.get('pardon', 0)} | 🚫{stats.get('punish', 0)}"
     )
     await safe_edit_message(message, text, chat_detail_keyboard(chat_id, mod_on))
 
@@ -295,7 +295,7 @@ async def cb_stats(callback: CallbackQuery, db: Database) -> None:
     owner = await is_owner(callback.from_user.id)
     text = (
         f"{E['chart']} <b>Статистика за 7 дней</b>\n\n"
-        f"⚠️ Предупреждений: <b>{stats.get('pardon', 0)}</b>\n"
+        f"⚠️ Предупреждений: <b>{stats.get('warning', 0) + stats.get('pardon', 0)}</b>\n"
         f"🚫 Наказан: <b>{stats.get('punish', 0)}</b>"
     )
     await safe_edit_message(callback.message, text, admin_main_keyboard(owner))
